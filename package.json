@@ -1,0 +1,15 @@
+{
+  "name": "pi-sandbox",
+  "version": "1.0.0",
+  "description": "OS-level sandbox for pi coding agent — macOS sandbox-exec / Linux bubblewrap kernel-enforced isolation",
+  "license": "MIT",
+  "pi": {
+    "extensions": ["./index.ts"]
+  },
+  "scripts": {
+    "test": "tsx --test guard.test.ts"
+  },
+  "devDependencies": {
+    "tsx": "^4.0.0"
+  }
+}
