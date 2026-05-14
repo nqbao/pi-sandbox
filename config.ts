@@ -2,8 +2,8 @@ import { existsSync, readFileSync } from "node:fs";
 import { resolve, isAbsolute } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import type { SandboxConfig, PathResolver, SandboxProviderType } from "./types";
-export { isPathAllowed } from "./guard";
+import type { SandboxConfig, PathResolver, SandboxProviderType } from "./types.ts";
+export { isPathAllowed } from "./guard.ts";
 
 const VALID_PROVIDERS = new Set<SandboxProviderType>(["auto", "sandbox-exec", "bubblewrap", "none"]);
 
@@ -38,6 +38,10 @@ export function createPathResolver(workspaceDir: string): PathResolver {
 const DEFAULT_WRITABLE = ["${WORKSPACE}", "${TMP}"];
 const DEFAULT_DENY_WITHIN = ["${WORKSPACE}/.git/hooks"];
 
+export function getProtectedConfigPaths(): string[] {
+  return CONFIG_SEARCH_PATHS.map((getPath) => resolve(getPath()));
+}
+
 export function loadConfig(workspaceDir: string): { config: SandboxConfig; pathResolver: PathResolver } {
   const pathResolver = createPathResolver(workspaceDir);
 
@@ -58,7 +62,7 @@ export function loadConfig(workspaceDir: string): { config: SandboxConfig; pathR
   return {
     config: {
       writable: resolveList(raw.writable, DEFAULT_WRITABLE, pathResolver),
-      denyWithin: resolveList(raw.denyWithin, DEFAULT_DENY_WITHIN, pathResolver),
+      denyWithin: mergeDenyWithin(raw.denyWithin, pathResolver),
       network: raw.network ?? true,
       provider: resolveProvider(raw.provider),
     },
@@ -71,6 +75,12 @@ function resolveList(raw: unknown, fallback: string[], resolver: PathResolver): 
     return raw.map((p) => resolve(resolver.resolve(String(p))));
   }
   return fallback.map((p) => resolve(resolver.resolve(p)));
+}
+
+function mergeDenyWithin(raw: unknown, resolver: PathResolver): string[] {
+  const resolved = resolveList(raw, DEFAULT_DENY_WITHIN, resolver);
+  const merged = [...resolved, ...getProtectedConfigPaths()];
+  return [...new Set(merged.map((p) => resolve(p)))];
 }
 
 function resolveProvider(raw: unknown): SandboxProviderType {

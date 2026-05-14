@@ -6,8 +6,8 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { resolve, dirname, basename, join } from "node:path";
 import { realpathSync, readFileSync } from "node:fs";
-import { loadConfig, isPathAllowed } from "./config";
-import { selectProvider } from "./providers";
+import { loadConfig, isPathAllowed } from "./config.ts";
+import { selectProvider } from "./providers.ts";
 
 let _version = "unknown";
 try {

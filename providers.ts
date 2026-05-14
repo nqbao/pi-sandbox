@@ -2,8 +2,8 @@ import { existsSync } from "node:fs";
 import { resolve as pathResolve } from "node:path";
 import { platform } from "node:os";
 import type { BashOperations } from "@earendil-works/pi-coding-agent";
-import type { SandboxProvider, SandboxConfig, SandboxProviderType } from "./types";
-import { stripTrailingSep } from "./guard";
+import type { SandboxProvider, SandboxConfig, SandboxProviderType } from "./types.ts";
+import { stripTrailingSep } from "./guard.ts";
 
 function shellEscape(s: string): string {
   const sanitized = s.replace(/[\x00\r\n]/g, (ch) => ch === "\n" ? " " : "");

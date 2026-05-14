@@ -1,5 +1,5 @@
 import { resolve } from "node:path";
-import type { SandboxConfig } from "./types";
+import type { SandboxConfig } from "./types.ts";
 
 export function stripTrailingSep(p: string): string {
   if (p === "/") return "";

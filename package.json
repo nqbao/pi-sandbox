@@ -1,15 +1,21 @@
 {
-  "name": "pi-sandbox",
+  "name": "@nqbao/pi-sandbox",
   "version": "1.0.0",
   "description": "OS-level sandbox for pi coding agent — macOS sandbox-exec / Linux bubblewrap kernel-enforced isolation",
+  "type": "module",
   "license": "MIT",
+  "keywords": ["pi-package"],
   "pi": {
     "extensions": ["./index.ts"]
   },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
   "scripts": {
-    "test": "tsx --test guard.test.ts"
+    "test": "node --experimental-transform-types --test *.test.ts"
   },
   "devDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
     "tsx": "^4.0.0"
   }
 }

@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { isPathAllowed, stripTrailingSep } from "./guard";
-import type { SandboxConfig } from "./types";
+import { isPathAllowed, stripTrailingSep } from "./guard.ts";
+import type { SandboxConfig } from "./types.ts";
 
 describe("stripTrailingSep", () => {
   it("removes a single trailing slash", () => {
