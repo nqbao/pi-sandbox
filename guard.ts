@@ -1,3 +1,4 @@
+import { homedir } from "node:os";
 import { resolve } from "node:path";
 import type { SandboxConfig } from "./types.ts";
 
@@ -7,6 +8,20 @@ export function stripTrailingSep(p: string): string {
     p = p.slice(0, -1);
   }
   return p;
+}
+
+export function expandHomePath(p: string): string {
+  if (p === "~") {
+    return homedir();
+  }
+  if (p.startsWith("~/")) {
+    return resolve(homedir(), p.slice(2));
+  }
+  return p;
+}
+
+export function resolveToolPath(cwd: string, targetPath: string): string {
+  return resolve(cwd, expandHomePath(targetPath));
 }
 
 export function isPathAllowed(absolutePath: string, config: SandboxConfig): boolean {

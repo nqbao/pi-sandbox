@@ -1,6 +1,8 @@
 import type { BashOperations } from "@earendil-works/pi-coding-agent";
 
 export interface SandboxConfig {
+  /** Global sandbox switch. When false, bash and file-tool guards run unsandboxed. Default: true. */
+  enabled: boolean;
   /** Directories the agent is allowed to write to. "${WORKSPACE}" expands to the project root. */
   writable: string[];
   /** Paths explicitly denied for writes, even inside writable directories (e.g. .git/hooks). */

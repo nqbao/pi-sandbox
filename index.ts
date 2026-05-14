@@ -8,6 +8,7 @@ import { resolve, dirname, basename, join } from "node:path";
 import { realpathSync, readFileSync } from "node:fs";
 import { loadConfig, isPathAllowed } from "./config.ts";
 import { selectProvider } from "./providers.ts";
+import { resolveToolPath } from "./guard.ts";
 
 let _version = "unknown";
 try {
@@ -19,34 +20,40 @@ try {
 
 export default function (pi: ExtensionAPI) {
   const workspaceDir = process.cwd();
-  const { config } = loadConfig(workspaceDir);
-  const provider = selectProvider(config.provider);
+  let runtimeEnabledOverride: boolean | undefined;
 
-  if (config.provider && config.provider !== "auto" && !provider.available()) {
-    console.warn(
-      `[pi-sandbox] Forced provider "${config.provider}" is not available on this system. ` +
-        `Falling back to automatic detection. Set provider to "auto" to suppress this warning.`,
-    );
-  }
+  function getState() {
+    const { config } = loadConfig(workspaceDir);
+    const provider = selectProvider(config.provider);
 
-  const activeProvider = provider.available() ? provider : selectProvider("auto");
+    if (config.provider && config.provider !== "auto" && !provider.available()) {
+      console.warn(
+        `[pi-sandbox] Forced provider "${config.provider}" is not available on this system. ` +
+          `Falling back to automatic detection. Set provider to "auto" to suppress this warning.`,
+      );
+    }
 
-  if (activeProvider.name === "none") {
-    console.warn(
-      "[pi-sandbox] No OS sandbox provider available (sandbox-exec requires macOS, bwrap requires Linux). " +
-        "Commands will run unsandboxed. Install bubblewrap (`apt install bubblewrap`) or ensure sandbox-exec is in PATH.",
-    );
-  } else {
-    console.log(`[pi-sandbox] Using sandbox provider: ${activeProvider.name}`);
+    const activeProvider = provider.available() ? provider : selectProvider("auto");
+    const enabled = runtimeEnabledOverride ?? config.enabled;
+
+    return { config, activeProvider, enabled };
   }
 
   // ── Bash tool override ──────────────────────────────────────────────────
 
   const localOps = createLocalBashOperations();
-  const sandboxedOps = activeProvider.wrap(localOps, workspaceDir, config);
+  const dynamicOps = {
+    exec(command: string, cwd: string, options: Parameters<typeof localOps.exec>[2]) {
+      const state = getState();
+      if (!state.enabled) {
+        return localOps.exec(command, cwd, options);
+      }
+      return state.activeProvider.wrap(localOps, workspaceDir, state.config).exec(command, cwd, options);
+    },
+  };
 
   const bashTool = createBashTool(workspaceDir, {
-    operations: sandboxedOps,
+    operations: dynamicOps,
   });
   pi.registerTool(bashTool);
 
@@ -67,11 +74,16 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("tool_call", async (event, ctx) => {
     const cwd = ctx.cwd ?? workspaceDir;
+    const { config, enabled } = getState();
+
+    if (!enabled) {
+      return;
+    }
 
     if (isToolCallEventType("write", event)) {
       const targetPath = event.input?.path;
       if (targetPath) {
-        const absolute = resolveRealPath(resolve(cwd, targetPath));
+        const absolute = resolveRealPath(resolveToolPath(cwd, targetPath));
         if (!isPathAllowed(absolute, config)) {
           return {
             block: true,
@@ -84,7 +96,7 @@ export default function (pi: ExtensionAPI) {
     if (isToolCallEventType("edit", event)) {
       const targetPath = event.input?.path;
       if (targetPath) {
-        const absolute = resolveRealPath(resolve(cwd, targetPath));
+        const absolute = resolveRealPath(resolveToolPath(cwd, targetPath));
         if (!isPathAllowed(absolute, config)) {
           return {
             block: true,
@@ -97,7 +109,7 @@ export default function (pi: ExtensionAPI) {
     if (isToolCallEventType("delete", event)) {
       const targetPath = event.input?.path ?? event.input?.filePath;
       if (targetPath) {
-        const absolute = resolveRealPath(resolve(cwd, targetPath));
+        const absolute = resolveRealPath(resolveToolPath(cwd, targetPath));
         if (!isPathAllowed(absolute, config)) {
           return {
             block: true,
@@ -111,7 +123,7 @@ export default function (pi: ExtensionAPI) {
       const sourcePath = event.input?.path ?? event.input?.source;
       const destPath = event.input?.destination ?? event.input?.target;
       if (sourcePath) {
-        const absolute = resolveRealPath(resolve(cwd, sourcePath));
+        const absolute = resolveRealPath(resolveToolPath(cwd, sourcePath));
         if (!isPathAllowed(absolute, config)) {
           return {
             block: true,
@@ -120,7 +132,7 @@ export default function (pi: ExtensionAPI) {
         }
       }
       if (destPath) {
-        const absolute = resolveRealPath(resolve(cwd, destPath));
+        const absolute = resolveRealPath(resolveToolPath(cwd, destPath));
         if (!isPathAllowed(absolute, config)) {
           return {
             block: true,
@@ -135,7 +147,7 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("user_bash", (_event, _ctx) => {
     return {
-      operations: sandboxedOps,
+      operations: dynamicOps,
     };
   });
 
@@ -144,8 +156,11 @@ export default function (pi: ExtensionAPI) {
   pi.registerCommand("sandbox-status", {
     description: "Show pi-sandbox status and configuration",
     handler: async (_args, ctx) => {
+      const { config, activeProvider, enabled } = getState();
       const lines = [
         `pi-sandbox v${_version}`,
+        `Enabled:      ${enabled ? "yes" : "no"}`,
+        `Override:     ${runtimeEnabledOverride === undefined ? "config" : runtimeEnabledOverride ? "enabled" : "disabled"}`,
         `Provider:     ${activeProvider.name}`,
         `Network:      ${config.network ? "allowed" : "blocked"}`,
         `Writable:`,
@@ -158,6 +173,30 @@ export default function (pi: ExtensionAPI) {
         }
       }
       ctx.ui.notify(lines.join("\n"), "info");
+    },
+  });
+
+  pi.registerCommand("sandbox-enable", {
+    description: "Enable pi-sandbox for the current Pi process",
+    handler: async (_args, ctx) => {
+      runtimeEnabledOverride = true;
+      ctx.ui.notify("pi-sandbox enabled for this Pi process", "info");
+    },
+  });
+
+  pi.registerCommand("sandbox-disable", {
+    description: "Disable pi-sandbox for the current Pi process",
+    handler: async (_args, ctx) => {
+      runtimeEnabledOverride = false;
+      ctx.ui.notify("pi-sandbox disabled for this Pi process", "warning");
+    },
+  });
+
+  pi.registerCommand("sandbox-reset", {
+    description: "Reset pi-sandbox runtime override and return to config-driven mode",
+    handler: async (_args, ctx) => {
+      runtimeEnabledOverride = undefined;
+      ctx.ui.notify("pi-sandbox override cleared; using config again", "info");
     },
   });
 }

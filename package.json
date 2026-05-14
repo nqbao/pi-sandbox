@@ -1,10 +1,20 @@
 {
   "name": "@nqbao/pi-sandbox",
-  "version": "1.0.0",
+  "version": "0.1.0",
   "description": "OS-level sandbox for pi coding agent — macOS sandbox-exec / Linux bubblewrap kernel-enforced isolation",
   "type": "module",
   "license": "MIT",
   "keywords": ["pi-package"],
+  "files": [
+    "index.ts",
+    "config.ts",
+    "providers.ts",
+    "guard.ts",
+    "types.ts",
+    "*.test.ts",
+    "README.md",
+    "LICENSE"
+  ],
   "pi": {
     "extensions": ["./index.ts"]
   },

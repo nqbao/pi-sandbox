@@ -1,6 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { isPathAllowed, stripTrailingSep } from "./guard.ts";
+import { homedir } from "node:os";
+import { expandHomePath, isPathAllowed, resolveToolPath, stripTrailingSep } from "./guard.ts";
 import type { SandboxConfig } from "./types.ts";
 
 describe("stripTrailingSep", () => {
@@ -29,8 +30,33 @@ describe("stripTrailingSep", () => {
   });
 });
 
+describe("expandHomePath", () => {
+  it("expands bare tilde to the home directory", () => {
+    assert.equal(expandHomePath("~"), homedir());
+  });
+
+  it("expands home-relative paths", () => {
+    assert.equal(expandHomePath("~/file.txt"), `${homedir()}/file.txt`);
+  });
+
+  it("leaves non-home paths unchanged", () => {
+    assert.equal(expandHomePath("src/file.txt"), "src/file.txt");
+  });
+});
+
+describe("resolveToolPath", () => {
+  it("resolves tilde paths against the home directory", () => {
+    assert.equal(resolveToolPath("/workspace", "~/file.txt"), `${homedir()}/file.txt`);
+  });
+
+  it("resolves relative paths against cwd", () => {
+    assert.equal(resolveToolPath("/workspace", "src/file.txt"), "/workspace/src/file.txt");
+  });
+});
+
 describe("isPathAllowed", () => {
   const config: SandboxConfig = {
+    enabled: true,
     writable: ["/workspace", "/tmp"],
     denyWithin: ["/workspace/.git/hooks"],
     network: true,
@@ -67,6 +93,7 @@ describe("isPathAllowed", () => {
 
   it("handles trailing slashes in config paths", () => {
     const configWithSlashes: SandboxConfig = {
+      enabled: true,
       writable: ["/workspace/", "/tmp/"],
       denyWithin: ["/workspace/.git/hooks/"],
       network: true,
@@ -83,6 +110,7 @@ describe("isPathAllowed", () => {
 
   it("does not allow sibling paths that look like prefixes", () => {
     const c: SandboxConfig = {
+      enabled: true,
       writable: ["/workspace"],
       denyWithin: [],
       network: true,
@@ -98,6 +126,7 @@ describe("isPathAllowed", () => {
 
   it("normalizes .. in config writable paths", () => {
     const c: SandboxConfig = {
+      enabled: true,
       writable: ["/workspace/../shared"],
       denyWithin: [],
       network: true,
@@ -108,6 +137,7 @@ describe("isPathAllowed", () => {
 
   it("normalizes internal double slashes in config paths", () => {
     const c: SandboxConfig = {
+      enabled: true,
       writable: ["/workspace//src"],
       denyWithin: ["/workspace//src/.git"],
       network: true,
@@ -118,11 +148,13 @@ describe("isPathAllowed", () => {
 
   it("denies everything when writable is empty", () => {
     const c: SandboxConfig = { writable: [], denyWithin: [], network: true };
+    c.enabled = true;
     assert.equal(isPathAllowed("/anything", c), false);
   });
 
   it("does not deny when denyWithin is empty", () => {
     const c: SandboxConfig = {
+      enabled: true,
       writable: ["/workspace"],
       denyWithin: [],
       network: true,

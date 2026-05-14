@@ -1,14 +1,10 @@
 import { existsSync } from "node:fs";
+import { spawn } from "node:child_process";
 import { resolve as pathResolve } from "node:path";
 import { platform } from "node:os";
 import type { BashOperations } from "@earendil-works/pi-coding-agent";
 import type { SandboxProvider, SandboxConfig, SandboxProviderType } from "./types.ts";
 import { stripTrailingSep } from "./guard.ts";
-
-function shellEscape(s: string): string {
-  const sanitized = s.replace(/[\x00\r\n]/g, (ch) => ch === "\n" ? " " : "");
-  return `'${sanitized.replace(/'/g, "'\\''")}'`;
-}
 
 function findBinary(name: string): boolean {
   const pathDirs = (process.env.PATH ?? "").split(":").filter(Boolean);
@@ -36,9 +32,7 @@ class SandboxExecProvider implements SandboxProvider {
     return {
       ...inner,
       exec(command, cwd, options) {
-        const escapedCommand = shellEscape(command);
-        const sandboxCmd = `sandbox-exec -p ${shellEscape(profile)} -- /bin/sh -c ${escapedCommand}`;
-        return inner.exec(sandboxCmd, cwd, options);
+        return spawnSandboxedCommand("sandbox-exec", ["-p", profile], command, cwd, options);
       },
     };
   }
@@ -138,9 +132,7 @@ class BubblewrapProvider implements SandboxProvider {
       ...inner,
       exec(command, cwd, options) {
         const args = buildBwrapArgs(cwd, config, workspaceDir);
-        const escapedCommand = shellEscape(command);
-        const bwrapCmd = `${args.join(" ")} /bin/sh -c ${escapedCommand}`;
-        return inner.exec(bwrapCmd, cwd, options);
+        return spawnSandboxedCommand("bwrap", args, command, cwd, options);
       },
     };
   }
@@ -163,14 +155,14 @@ function buildBwrapArgs(cwd: string, config: SandboxConfig, workspaceDir: string
 
   for (const dir of SYSTEM_RO_BINDS) {
     if (existsSync(dir)) {
-      args.push("--ro-bind", shellEscape(dir), shellEscape(dir));
+      args.push("--ro-bind", dir, dir);
       bindMounted.add(stripTrailingSep(dir));
     }
   }
 
   for (const p of config.writable) {
     if (existsSync(p)) {
-      args.push("--bind", shellEscape(p), shellEscape(p));
+      args.push("--bind", p, p);
       bindMounted.add(stripTrailingSep(p));
     }
   }
@@ -178,18 +170,18 @@ function buildBwrapArgs(cwd: string, config: SandboxConfig, workspaceDir: string
   // always mount workspace as read-only if not already covered
   const ws = stripTrailingSep(pathResolve(workspaceDir));
   if (existsSync(workspaceDir) && !isUnderBindRoot(ws, bindMounted)) {
-    args.push("--ro-bind", shellEscape(workspaceDir), shellEscape(workspaceDir));
+    args.push("--ro-bind", workspaceDir, workspaceDir);
   }
 
   // denyWithin: ro-bind overlay on specific subpaths (order matters — later wins)
   for (const p of config.denyWithin) {
     if (existsSync(p)) {
-      args.push("--ro-bind", shellEscape(p), shellEscape(p));
+      args.push("--ro-bind", p, p);
     }
   }
 
   const chdirTarget = resolveChdirTarget(cwd, config.writable, workspaceDir);
-  args.push("--chdir", shellEscape(chdirTarget));
+  args.push("--chdir", chdirTarget);
   args.push("--");
   return args;
 }
@@ -229,6 +221,76 @@ class NoopProvider implements SandboxProvider {
   wrap(inner: BashOperations, _cwd: string, _config: SandboxConfig): BashOperations {
     return inner;
   }
+}
+
+function spawnSandboxedCommand(
+  binary: string,
+  args: string[],
+  command: string,
+  cwd: string,
+  options: {
+    onData: (data: Buffer) => void;
+    signal?: AbortSignal;
+    timeout?: number;
+    env?: NodeJS.ProcessEnv;
+  },
+): Promise<{ exitCode: number | null }> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(binary, [...args, "--", "/bin/sh", "-c", command], {
+      cwd,
+      env: options.env ?? process.env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    let timedOut = false;
+    let timeoutHandle: NodeJS.Timeout | undefined;
+
+    const killChild = () => {
+      if (!child.killed) {
+        child.kill("SIGKILL");
+      }
+    };
+
+    if (options.timeout !== undefined && options.timeout > 0) {
+      timeoutHandle = setTimeout(() => {
+        timedOut = true;
+        killChild();
+      }, options.timeout * 1000);
+    }
+
+    const onAbort = () => {
+      killChild();
+    };
+
+    if (options.signal) {
+      if (options.signal.aborted) {
+        onAbort();
+      } else {
+        options.signal.addEventListener("abort", onAbort, { once: true });
+      }
+    }
+
+    child.stdout?.on("data", options.onData);
+    child.stderr?.on("data", options.onData);
+    child.on("error", (err) => {
+      if (timeoutHandle) clearTimeout(timeoutHandle);
+      if (options.signal) options.signal.removeEventListener("abort", onAbort);
+      reject(err);
+    });
+    child.on("close", (code) => {
+      if (timeoutHandle) clearTimeout(timeoutHandle);
+      if (options.signal) options.signal.removeEventListener("abort", onAbort);
+      if (options.signal?.aborted) {
+        reject(new Error("aborted"));
+        return;
+      }
+      if (timedOut) {
+        reject(new Error(`timeout:${options.timeout}`));
+        return;
+      }
+      resolve({ exitCode: code });
+    });
+  });
 }
 
 // ─── Provider factory ──────────────────────────────────────────────────────

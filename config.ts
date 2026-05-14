@@ -42,6 +42,15 @@ export function getProtectedConfigPaths(): string[] {
   return CONFIG_SEARCH_PATHS.map((getPath) => resolve(getPath()));
 }
 
+export function getRequiredWritablePaths(pathResolver: PathResolver): string[] {
+  return [
+    resolve(pathResolver.resolve("${WORKSPACE}")),
+    resolve(pathResolver.resolve("${TMP}")),
+    resolve(pathResolver.resolve("${HOME}/.pi")),
+    resolve(getAgentDir()),
+  ];
+}
+
 export function loadConfig(workspaceDir: string): { config: SandboxConfig; pathResolver: PathResolver } {
   const pathResolver = createPathResolver(workspaceDir);
 
@@ -61,7 +70,8 @@ export function loadConfig(workspaceDir: string): { config: SandboxConfig; pathR
 
   return {
     config: {
-      writable: resolveList(raw.writable, DEFAULT_WRITABLE, pathResolver),
+      enabled: resolveEnabled(raw.enabled),
+      writable: mergeWritable(raw.writable, pathResolver),
       denyWithin: mergeDenyWithin(raw.denyWithin, pathResolver),
       network: raw.network ?? true,
       provider: resolveProvider(raw.provider),
@@ -77,10 +87,26 @@ function resolveList(raw: unknown, fallback: string[], resolver: PathResolver): 
   return fallback.map((p) => resolve(resolver.resolve(p)));
 }
 
+function mergeWritable(raw: unknown, resolver: PathResolver): string[] {
+  const resolved = resolveList(raw, DEFAULT_WRITABLE, resolver);
+  const merged = [...resolved, ...getRequiredWritablePaths(resolver)];
+  return [...new Set(merged.map((p) => resolve(p)))];
+}
+
 function mergeDenyWithin(raw: unknown, resolver: PathResolver): string[] {
   const resolved = resolveList(raw, DEFAULT_DENY_WITHIN, resolver);
   const merged = [...resolved, ...getProtectedConfigPaths()];
   return [...new Set(merged.map((p) => resolve(p)))];
+}
+
+export function resolveEnabled(raw: unknown): boolean {
+  if (typeof raw === "boolean") {
+    return raw;
+  }
+  if (raw !== undefined) {
+    console.warn(`[pi-sandbox] Invalid enabled value "${String(raw)}", falling back to true`);
+  }
+  return true;
 }
 
 function resolveProvider(raw: unknown): SandboxProviderType {
