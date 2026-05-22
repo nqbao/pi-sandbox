@@ -21,13 +21,19 @@ function findBinary(name: string): boolean {
 
 class SandboxExecProvider implements SandboxProvider {
   readonly name = "sandbox-exec";
+  private _profileCache = new Map<string, string>();
 
   available(): boolean {
     return platform() === "darwin" && findBinary("sandbox-exec");
   }
 
   wrap(inner: BashOperations, _cwd: string, config: SandboxConfig): BashOperations {
-    const profile = buildSandboxExecProfile(config);
+    const key = JSON.stringify([config.readOnly, config.network, config.writable, config.denyRead, config.denyWithin]);
+    let profile = this._profileCache.get(key);
+    if (!profile) {
+      profile = buildSandboxExecProfile(config);
+      this._profileCache.set(key, profile);
+    }
 
     return {
       ...inner,
@@ -75,7 +81,7 @@ export function buildSandboxExecProfile(config: SandboxConfig): string {
     }
   }
 
-  if (config.writable.length > 0) {
+  if (!config.readOnly && config.writable.length > 0) {
     lines.push("; writable paths");
     lines.push("(allow file-write*");
     for (const p of config.writable) {
@@ -87,8 +93,6 @@ export function buildSandboxExecProfile(config: SandboxConfig): string {
   for (const p of config.denyWithin) {
     const ep = escapeSbplPath(p);
     lines.push(`(deny file-write* (subpath "${ep}"))`);
-    lines.push(`(deny file-write-unlink (subpath "${ep}"))`);
-    lines.push(`(deny file-write-create (subpath "${ep}"))`);
   }
 
   lines.push(
@@ -122,6 +126,10 @@ export function buildSandboxExecProfile(config: SandboxConfig): string {
 
 // ─── Linux bubblewrap ──────────────────────────────────────────────────────
 
+// Intentionally excludes /var — bind-mounting the entire tree (/var/log, /var/cache, /var/lib)
+// adds seconds of startup delay and significant memory pressure on many distros.
+// /var/run and /var/lock are symlinks to /run (already bound above).
+// Add /var or specific subpaths to writable in sandbox.json if needed.
 const SYSTEM_RO_BINDS = [
   "/usr",
   "/bin",
@@ -131,7 +139,6 @@ const SYSTEM_RO_BINDS = [
   "/opt",
   "/sbin",
   "/run",
-  "/var",
 ];
 
 class BubblewrapProvider implements SandboxProvider {
@@ -181,7 +188,7 @@ export function buildBwrapSetup(
 
   for (const p of config.writable) {
     if (existsSync(p)) {
-      args.push("--bind", p, p);
+      args.push(config.readOnly ? "--ro-bind" : "--bind", p, p);
       bindMounted.add(stripTrailingSep(p));
     }
   }
@@ -210,9 +217,6 @@ export function buildBwrapSetup(
       continue;
     }
     const overlay = createDenyReadOverlay(p);
-    if (!overlay) {
-      continue;
-    }
     cleanupDirs.push(overlay.cleanupDir);
     args.push("--ro-bind", overlay.source, p);
   }
@@ -233,7 +237,7 @@ export function buildBwrapSetup(
   };
 }
 
-function createDenyReadOverlay(targetPath: string): { source: string; cleanupDir: string } | null {
+function createDenyReadOverlay(targetPath: string): { source: string; cleanupDir: string } {
   const cleanupDir = mkdtempSync(join(tmpdir(), "pi-sandbox-denyread-"));
   const stat = statSync(targetPath);
 
@@ -309,6 +313,7 @@ function spawnSandboxedCommand(
   cleanup?: () => void,
 ): Promise<{ exitCode: number | null }> {
   return new Promise((resolve, reject) => {
+    let settled = false;
     let cleanedUp = false;
     const runCleanup = () => {
       if (cleanedUp) {
@@ -350,6 +355,7 @@ function spawnSandboxedCommand(
     }
 
     const onAbort = () => {
+      if (settled) return;
       killChild();
     };
 
@@ -364,12 +370,14 @@ function spawnSandboxedCommand(
     child.stdout?.on("data", options.onData);
     child.stderr?.on("data", options.onData);
     child.on("error", (err) => {
+      settled = true;
       if (timeoutHandle) clearTimeout(timeoutHandle);
       if (options.signal) options.signal.removeEventListener("abort", onAbort);
       runCleanup();
       reject(err);
     });
     child.on("close", (code) => {
+      settled = true;
       if (timeoutHandle) clearTimeout(timeoutHandle);
       if (options.signal) options.signal.removeEventListener("abort", onAbort);
       runCleanup();

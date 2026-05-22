@@ -4,6 +4,7 @@ import { homedir, tmpdir } from "node:os";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { SandboxConfig, PathResolver, SandboxProviderType } from "./types.ts";
 export { isPathAllowed } from "./guard.ts";
+import { resolveRealPath } from "./guard.ts";
 
 const VALID_PROVIDERS = new Set<SandboxProviderType>(["auto", "sandbox-exec", "bubblewrap", "none"]);
 
@@ -72,6 +73,7 @@ export function loadConfig(workspaceDir: string): { config: SandboxConfig; pathR
   return {
     config: {
       enabled: resolveEnabled(raw.enabled),
+      readOnly: resolveReadOnly(raw.readOnly),
       denyRead: mergeDenyRead(raw.denyRead, pathResolver),
       writable: mergeWritable(raw.writable, pathResolver),
       denyWithin: mergeDenyWithin(raw.denyWithin, pathResolver),
@@ -84,27 +86,27 @@ export function loadConfig(workspaceDir: string): { config: SandboxConfig; pathR
 
 function resolveList(raw: unknown, fallback: string[], resolver: PathResolver): string[] {
   if (Array.isArray(raw)) {
-    return raw.map((p) => resolve(resolver.resolve(String(p))));
+    return raw.map((p) => resolveRealPath(resolver.resolve(String(p))));
   }
-  return fallback.map((p) => resolve(resolver.resolve(p)));
+  return fallback.map((p) => resolveRealPath(resolver.resolve(p)));
 }
 
 function mergeWritable(raw: unknown, resolver: PathResolver): string[] {
   const resolved = resolveList(raw, DEFAULT_WRITABLE, resolver);
-  const merged = [...resolved, ...getRequiredWritablePaths(resolver)];
-  return [...new Set(merged.map((p) => resolve(p)))];
+  const required = getRequiredWritablePaths(resolver).map((p) => resolveRealPath(p));
+  return [...new Set([...resolved, ...required])];
 }
 
 function mergeDenyRead(raw: unknown, resolver: PathResolver): string[] {
   const resolved = resolveList(raw, [], resolver);
-  const merged = [...DEFAULT_DENY_READ, ...resolved];
-  return [...new Set(merged.map((p) => resolve(resolver.resolve(p))))];
+  // DEFAULT_DENY_READ is empty; paths are already resolved by resolveList
+  return [...new Set(resolved)];
 }
 
 function mergeDenyWithin(raw: unknown, resolver: PathResolver): string[] {
   const resolved = resolveList(raw, DEFAULT_DENY_WITHIN, resolver);
-  const merged = [...resolved, ...getProtectedConfigPaths()];
-  return [...new Set(merged.map((p) => resolve(p)))];
+  const protectedPaths = getProtectedConfigPaths().map((p) => resolveRealPath(p));
+  return [...new Set([...resolved, ...protectedPaths])];
 }
 
 export function resolveEnabled(raw: unknown): boolean {
@@ -115,6 +117,16 @@ export function resolveEnabled(raw: unknown): boolean {
     console.warn(`[pi-sandbox] Invalid enabled value "${String(raw)}", falling back to true`);
   }
   return true;
+}
+
+export function resolveReadOnly(raw: unknown): boolean {
+  if (typeof raw === "boolean") {
+    return raw;
+  }
+  if (raw !== undefined) {
+    console.warn(`[pi-sandbox] Invalid readOnly value "${String(raw)}", falling back to false`);
+  }
+  return false;
 }
 
 function resolveProvider(raw: unknown): SandboxProviderType {

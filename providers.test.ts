@@ -23,6 +23,25 @@ describe("buildSandboxExecProfile", () => {
     assert.match(profile, /\(deny file-read\* \(subpath "\/etc\/passwd"\)\)/);
     assert.match(profile, /\(deny file-read\* \(literal "\/Users\/test\/\.ssh"\)\)/);
   });
+
+  it("does not emit writable paths when readOnly is true", () => {
+    const config: SandboxConfig = {
+      enabled: true,
+      readOnly: true,
+      denyRead: [],
+      writable: ["/workspace", "/tmp"],
+      denyWithin: [],
+      network: true,
+    };
+
+    const profile = buildSandboxExecProfile(config);
+
+    // The writable-paths (allow file-write*) block must not appear.
+    // Device-access (allow file-write*) lines for /dev/* are still present.
+    assert.doesNotMatch(profile, /; writable paths/);
+    assert.doesNotMatch(profile, /\(subpath "\/workspace"\)/);
+    assert.doesNotMatch(profile, /\(subpath "\/tmp"\)/);
+  });
 });
 
 describe("buildBwrapSetup", () => {
@@ -45,7 +64,8 @@ describe("buildBwrapSetup", () => {
 
       const setup = buildBwrapSetup(workspace, config, workspace);
       try {
-        assert.notEqual(setup.args[0], "bwrap");
+        assert.ok(setup.args.length > 0, "expected non-empty args");
+        assert.ok(setup.args.includes("--unshare-all"), "expected --unshare-all flag");
         const fileOverlayIndex = setup.args.findIndex(
           (_arg, index) =>
             setup.args[index] === "--ro-bind" &&
@@ -102,6 +122,44 @@ describe("buildBwrapSetup", () => {
       }
     } finally {
       rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  it("mounts writable paths as --ro-bind when readOnly is true", () => {
+    const workspace = mkdtempSync(join(tmpdir(), "pi-sandbox-workspace-"));
+    const writableDir = mkdtempSync(join(tmpdir(), "pi-sandbox-writable-"));
+    try {
+      const config: SandboxConfig = {
+        enabled: true,
+        readOnly: true,
+        denyRead: [],
+        writable: [writableDir, workspace],
+        denyWithin: [],
+        network: true,
+      };
+
+      const setup = buildBwrapSetup(workspace, config, workspace);
+      try {
+        // Should NOT have --bind for writable paths
+        for (const p of [writableDir, workspace]) {
+          const bindIndex = setup.args.findIndex(
+            (_arg, index) => setup.args[index] === "--bind" && setup.args[index + 2] === p,
+          );
+          assert.equal(bindIndex, -1, `expected no --bind for ${p}`);
+        }
+        // Should have --ro-bind for writable paths
+        for (const p of [writableDir, workspace]) {
+          const roBindIndex = setup.args.findIndex(
+            (_arg, index) => setup.args[index] === "--ro-bind" && setup.args[index + 2] === p,
+          );
+          assert.notEqual(roBindIndex, -1, `expected --ro-bind for ${p}`);
+        }
+      } finally {
+        setup.cleanup();
+      }
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+      rmSync(writableDir, { recursive: true, force: true });
     }
   });
 });

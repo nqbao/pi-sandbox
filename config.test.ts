@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { loadConfig, getProtectedConfigPaths, getRequiredWritablePaths, resolveEnabled } from "./config.ts";
-import { isPathAllowed } from "./guard.ts";
+import { loadConfig, getProtectedConfigPaths, getRequiredWritablePaths, resolveEnabled, resolveReadOnly } from "./config.ts";
+import { isPathAllowed, resolveRealPath } from "./guard.ts";
 
 describe("resolveEnabled", () => {
   it("defaults to enabled", () => {
@@ -14,16 +14,28 @@ describe("resolveEnabled", () => {
   });
 });
 
+describe("resolveReadOnly", () => {
+  it("defaults to false", () => {
+    assert.equal(resolveReadOnly(undefined), false);
+  });
+
+  it("accepts explicit booleans", () => {
+    assert.equal(resolveReadOnly(true), true);
+    assert.equal(resolveReadOnly(false), false);
+  });
+});
+
 describe("loadConfig", () => {
   it("always includes required Pi support paths in writable roots", () => {
     const { config, pathResolver } = loadConfig("/workspace");
     const requiredPaths = getRequiredWritablePaths(pathResolver);
 
     for (const path of requiredPaths) {
+      const realPath = resolveRealPath(path);
       assert.equal(
-        config.writable.includes(path),
+        config.writable.includes(realPath),
         true,
-        `expected required writable path ${path} to be present`,
+        `expected required writable path ${realPath} to be present`,
       );
     }
   });
@@ -34,10 +46,11 @@ describe("loadConfig", () => {
     const protectedPaths = getProtectedConfigPaths();
 
     for (const path of protectedPaths) {
+      const realPath = resolveRealPath(path);
       assert.equal(
-        config.denyWithin.includes(path),
+        config.denyWithin.includes(realPath),
         true,
-        `expected protected config path ${path} to be denied`,
+        `expected protected config path ${realPath} to be denied`,
       );
     }
   });
@@ -47,13 +60,19 @@ describe("loadConfig", () => {
     const protectedPaths = getProtectedConfigPaths();
 
     for (const path of protectedPaths) {
-      assert.equal(config.denyWithin.includes(path), true);
-      assert.equal(isPathAllowed(path, config), false);
+      const realPath = resolveRealPath(path);
+      assert.equal(config.denyWithin.includes(realPath), true);
+      assert.equal(isPathAllowed(realPath, config), false);
     }
   });
 
   it("defaults denyRead to an empty list", () => {
     const { config } = loadConfig("/workspace");
     assert.deepEqual(config.denyRead, []);
+  });
+
+  it("defaults readOnly to false", () => {
+    const { config } = loadConfig("/workspace");
+    assert.equal(config.readOnly, false);
   });
 });

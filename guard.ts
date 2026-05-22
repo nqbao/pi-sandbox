@@ -1,10 +1,23 @@
+import { realpathSync } from "node:fs";
+import { resolve, dirname, basename, join } from "node:path";
 import { homedir } from "node:os";
-import { resolve } from "node:path";
 import type { SandboxConfig } from "./types.ts";
 
+export function resolveRealPath(targetPath: string): string {
+  try {
+    return realpathSync(targetPath);
+  } catch {
+    try {
+      const parent = realpathSync(dirname(targetPath));
+      return join(parent, basename(targetPath));
+    } catch {
+      return resolve(targetPath);
+    }
+  }
+}
+
 export function stripTrailingSep(p: string): string {
-  if (p === "/") return "";
-  while (p.endsWith("/")) {
+  while (p.length > 1 && p.endsWith("/")) {
     p = p.slice(0, -1);
   }
   return p;
@@ -73,5 +86,6 @@ export function isPathSearchable(absolutePath: string, config: SandboxConfig): b
 }
 
 export function isPathAllowed(absolutePath: string, config: SandboxConfig): boolean {
+  if (config.readOnly) return false;
   return isPathWithinRoots(absolutePath, config.writable, config.denyWithin);
 }

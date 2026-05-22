@@ -25,12 +25,12 @@ describe("stripTrailingSep", () => {
     assert.equal(stripTrailingSep("/foo/bar"), "/foo/bar");
   });
 
-  it("reduces root path to empty string", () => {
-    assert.equal(stripTrailingSep("/"), "");
+  it("preserves root path as single slash", () => {
+    assert.equal(stripTrailingSep("/"), "/");
   });
 
-  it("reduces multiple-root-slashes to empty string", () => {
-    assert.equal(stripTrailingSep("///"), "");
+  it("normalizes multiple root slashes to single slash", () => {
+    assert.equal(stripTrailingSep("///"), "/");
   });
 
   it("handles empty string", () => {
@@ -216,6 +216,19 @@ describe("isPathAllowed", () => {
       readOnly: true,
       denyRead: [],
       writable: [],
+      denyWithin: [],
+      network: true,
+    };
+    assert.equal(isPathAllowed("/workspace/file.ts", c), false);
+    assert.equal(isPathAllowed("/tmp/output", c), false);
+  });
+
+  it("readOnly overrides writable roots (config-level readOnly)", () => {
+    const c: SandboxConfig = {
+      enabled: true,
+      readOnly: true,
+      denyRead: [],
+      writable: ["/workspace", "/tmp"],
       denyWithin: [],
       network: true,
     };

@@ -4,18 +4,19 @@ import {
   createLocalBashOperations,
   isToolCallEventType,
 } from "@earendil-works/pi-coding-agent";
-import { resolve, dirname, basename, join } from "node:path";
-import { realpathSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { loadConfig, isPathAllowed } from "./config.ts";
 import { selectProvider } from "./providers.ts";
-import { isPathReadable, isPathSearchable, resolveToolPath } from "./guard.ts";
+import { isPathReadable, isPathSearchable, resolveToolPath, resolveRealPath } from "./guard.ts";
 
 let _version = "unknown";
 try {
   const pkg = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf-8"));
   _version = pkg.version ?? "unknown";
-} catch {
-  // package.json not accessible (e.g., bundled deployment)
+} catch (err) {
+  if (err instanceof SyntaxError) {
+    console.warn("[pi-sandbox] Failed to parse package.json — version reporting disabled");
+  }
 }
 
 export function applyReadOnlyOverride(config: ReturnType<typeof loadConfig>["config"], readOnlyOverride: boolean | undefined) {
@@ -153,19 +154,6 @@ export default function (pi: ExtensionAPI) {
 
   // ── Path guard for in-process file tools (write, edit) ──────────────────
 
-  function resolveRealPath(targetPath: string): string {
-    try {
-      return realpathSync(targetPath);
-    } catch {
-      try {
-        const parent = realpathSync(dirname(targetPath));
-        return join(parent, basename(targetPath));
-      } catch {
-        return resolve(targetPath);
-      }
-    }
-  }
-
   pi.on("tool_call", async (event, ctx) => {
     const cwd = ctx.cwd ?? workspaceDir;
     const { config, enabled } = getState();
@@ -200,6 +188,8 @@ export default function (pi: ExtensionAPI) {
       }
     }
 
+    // Future-proof guards for tools Pi doesn't ship yet.
+    // When Pi adds built-in delete/move tools, these handlers activate automatically.
     if (isToolCallEventType("delete", event)) {
       const targetPath = event.input?.path ?? event.input?.filePath;
       if (targetPath) {
@@ -331,6 +321,11 @@ export default function (pi: ExtensionAPI) {
   pi.registerCommand("sandbox-enable", {
     description: "Enable pi-sandbox for the current Pi process",
     handler: async (_args, ctx) => {
+      const { activeProvider } = getState();
+      if (activeProvider.name === "none") {
+        ctx.ui.notify("pi-sandbox: no sandbox provider available on this system", "error");
+        return;
+      }
       runtimeEnabledOverride = true;
       ctx.ui.notify("pi-sandbox enabled for this Pi process", "info");
     },
@@ -349,6 +344,7 @@ export default function (pi: ExtensionAPI) {
     handler: async (_args, ctx) => {
       runtimeEnabledOverride = undefined;
       runtimeReadOnlyOverride = undefined;
+      syncStartupOverrides();
       ctx.ui.notify("pi-sandbox overrides cleared; using config again", "info");
     },
   });
