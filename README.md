@@ -33,7 +33,7 @@ Behavior depends on the platform:
 
 - macOS: uses `sandbox-exec`
 - Linux: uses `bubblewrap`
-- if no supported provider is available: Pi falls back to normal unsandboxed execution and prints a warning
+- if no supported provider is available and sandboxing is enabled: bash commands fail with an error rather than running unsandboxed
 
 ## Configuration
 
@@ -45,7 +45,8 @@ The extension reads `sandbox.json` from:
 Supported fields:
 
 - `enabled`: turn the extension on or off globally
-- `denyRead`: optional paths blocked for Pi's built-in read-only file tools
+- `allowRead`: paths to opt out of the default read deny list (see below)
+- `denyRead`: additional paths to block for Pi's built-in read-only file tools
 - `writable`: directories Pi is allowed to modify
 - `denyWithin`: subpaths that stay blocked even if they are inside a writable directory
 - `network`: whether outbound network access is allowed
@@ -56,7 +57,8 @@ Example:
 ```json
 {
   "enabled": true,
-  "denyRead": ["${HOME}/.ssh", "${HOME}/.aws"],
+  "allowRead": ["${HOME}/.ssh"],
+  "denyRead": ["${HOME}/.config/my-secrets"],
   "writable": ["${WORKSPACE}", "${TMP}"],
   "denyWithin": ["${WORKSPACE}/.git/hooks"],
   "network": true,
@@ -74,17 +76,26 @@ By default, the extension allows writes to:
 
 - `${WORKSPACE}`
 - `${TMP}`
-- `${HOME}/.pi`
 - Pi agent dir
 
-By default, the extension does not block reads unless `denyRead` is configured.
+By default, the extension blocks reads from the following sensitive paths:
 
-`--sandbox-readonly` is a quick way to disable all filesystem writes regardless of `writable`, while keeping read access governed by the existing `denyRead` policy.
-If sandboxing is enabled but no supported OS provider is available, bash commands now fail instead of silently running unsandboxed.
+- `${HOME}/.ssh`
+- `${HOME}/.aws`
+- `${HOME}/.gnupg`
+- `${HOME}/.config/gcloud`
+- `${HOME}/.netrc`
+- `${HOME}/.git-credentials`
+- `/etc/shadow`
+- `/etc/sudoers`
+
+Use `allowRead` to unblock any of these for a specific project. If a path appears in both `allowRead` and `denyRead`, deny wins and a warning is logged.
+
+`--sandbox-readonly` is a quick way to disable all filesystem writes regardless of `writable`, while keeping read access governed by the existing deny policy.
 
 For recursive read tools like `grep` and `find`, pi-sandbox blocks starting from a parent path that would traverse into a denied subtree.
 
-And blocks:
+And blocks writes to:
 
 - `${WORKSPACE}/.git/hooks`
 

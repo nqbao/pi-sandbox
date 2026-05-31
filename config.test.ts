@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { loadConfig, getProtectedConfigPaths, getRequiredWritablePaths, resolveEnabled, resolveReadOnly } from "./config.ts";
+import { loadConfig, getProtectedConfigPaths, getRequiredWritablePaths, resolveEnabled, resolveReadOnly, computeEffectiveDenyRead } from "./config.ts";
 import { isPathAllowed, resolveRealPath } from "./guard.ts";
 
 describe("resolveEnabled", () => {
@@ -66,13 +66,94 @@ describe("loadConfig", () => {
     }
   });
 
-  it("defaults denyRead to an empty list", () => {
+  it("defaults denyRead to the resolved DEFAULT_DENY_READ paths", () => {
     const { config } = loadConfig("/workspace");
-    assert.deepEqual(config.denyRead, []);
+    assert.equal(config.denyRead.length > 0, true);
+    assert.equal(config.allowRead.length, 0);
   });
 
   it("defaults readOnly to false", () => {
     const { config } = loadConfig("/workspace");
     assert.equal(config.readOnly, false);
+  });
+});
+
+describe("computeEffectiveDenyRead", () => {
+  const defaults = ["/home/user/.ssh", "/home/user/.aws", "/etc/shadow"];
+
+  it("returns all defaults when no allowRead or denyRead", () => {
+    const { effectiveDenyRead, effectiveAllowRead, conflicts, inconsistentAllow } = computeEffectiveDenyRead([], [], defaults);
+    assert.deepEqual(effectiveDenyRead, defaults);
+    assert.deepEqual(effectiveAllowRead, []);
+    assert.deepEqual(conflicts, []);
+    assert.deepEqual(inconsistentAllow, []);
+  });
+
+  it("removes exact default path when covered by allowRead", () => {
+    const { effectiveDenyRead, effectiveAllowRead, inconsistentAllow } = computeEffectiveDenyRead([], ["/home/user/.ssh"], defaults);
+    assert.equal(effectiveDenyRead.includes("/home/user/.ssh"), false);
+    assert.equal(effectiveDenyRead.includes("/home/user/.aws"), true);
+    assert.equal(effectiveDenyRead.includes("/etc/shadow"), true);
+    assert.deepEqual(effectiveAllowRead, ["/home/user/.ssh"]);
+    assert.deepEqual(inconsistentAllow, []);
+  });
+
+  it("removes default child paths when parent is in allowRead", () => {
+    const defaultsWithChild = ["/home/user/.ssh", "/home/user/.ssh/id_rsa"];
+    const { effectiveDenyRead, effectiveAllowRead, inconsistentAllow } = computeEffectiveDenyRead([], ["/home/user/.ssh"], defaultsWithChild);
+    assert.equal(effectiveDenyRead.includes("/home/user/.ssh"), false);
+    assert.equal(effectiveDenyRead.includes("/home/user/.ssh/id_rsa"), false);
+    assert.deepEqual(effectiveAllowRead, ["/home/user/.ssh"]);
+    assert.deepEqual(inconsistentAllow, []);
+  });
+
+  it("merges user denyRead with filtered defaults", () => {
+    const { effectiveDenyRead } = computeEffectiveDenyRead(["/home/user/.config"], [], defaults);
+    assert.equal(effectiveDenyRead.includes("/home/user/.config"), true);
+    assert.equal(effectiveDenyRead.includes("/home/user/.ssh"), true);
+  });
+
+  it("detects conflict when same path is in allowRead and denyRead", () => {
+    const { effectiveDenyRead, effectiveAllowRead, conflicts } = computeEffectiveDenyRead(
+      ["/home/user/.ssh"],
+      ["/home/user/.ssh"],
+      defaults,
+    );
+    assert.deepEqual(conflicts, ["/home/user/.ssh"]);
+    assert.equal(effectiveDenyRead.includes("/home/user/.ssh"), true);
+    assert.equal(effectiveAllowRead.includes("/home/user/.ssh"), false);
+  });
+
+  it("no conflict when allowRead and denyRead have different paths", () => {
+    const { conflicts } = computeEffectiveDenyRead(["/home/user/.aws"], ["/home/user/.ssh"], defaults);
+    assert.deepEqual(conflicts, []);
+  });
+
+  it("detects conflict when denyRead is a parent of allowRead (allowRead is silently covered)", () => {
+    const { effectiveDenyRead, effectiveAllowRead, conflicts } = computeEffectiveDenyRead(
+      ["/home/user"],
+      ["/home/user/.ssh"],
+      [],
+    );
+    assert.deepEqual(conflicts, ["/home/user/.ssh"]);
+    assert.equal(effectiveDenyRead.includes("/home/user"), true);
+    assert.equal(effectiveAllowRead.includes("/home/user/.ssh"), false);
+  });
+
+  it("no conflict when allowRead is a parent of denyRead (intentional: allow broad, deny specific)", () => {
+    const { effectiveAllowRead, conflicts, inconsistentAllow } = computeEffectiveDenyRead(["/home/user/.ssh"], ["/home/user"], []);
+    assert.deepEqual(conflicts, []);
+    assert.deepEqual(inconsistentAllow, []);
+    assert.deepEqual(effectiveAllowRead, ["/home/user"]);
+  });
+
+  it("detects and removes allowRead entry that is a child of effectiveDenyRead", () => {
+    const { effectiveAllowRead, inconsistentAllow } = computeEffectiveDenyRead(
+      [],
+      ["/home/user/.ssh/config"],
+      ["/home/user/.ssh"],
+    );
+    assert.deepEqual(inconsistentAllow, ["/home/user/.ssh/config"]);
+    assert.deepEqual(effectiveAllowRead, []);
   });
 });

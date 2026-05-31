@@ -5,6 +5,8 @@ export interface SandboxConfig {
   enabled: boolean;
   /** When true, block all filesystem writes regardless of writable roots. */
   readOnly?: boolean;
+  /** Paths explicitly allowed for reads, overriding defaultDenyRead entries. */
+  allowRead?: string[];
   /** Paths explicitly denied for reads by built-in read-only file tools. */
   denyRead: string[];
   /** Directories the agent is allowed to write to. "${WORKSPACE}" expands to the project root. */

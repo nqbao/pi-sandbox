@@ -28,7 +28,7 @@ class SandboxExecProvider implements SandboxProvider {
   }
 
   wrap(inner: BashOperations, _cwd: string, config: SandboxConfig): BashOperations {
-    const key = JSON.stringify([config.readOnly, config.network, config.writable, config.denyRead, config.denyWithin]);
+    const key = JSON.stringify([config.readOnly, config.network, config.writable, config.denyRead, config.denyWithin, config.allowRead]);
     let profile = this._profileCache.get(key);
     if (!profile) {
       profile = buildSandboxExecProfile(config);
@@ -78,6 +78,15 @@ export function buildSandboxExecProfile(config: SandboxConfig): string {
       const ep = escapeSbplPath(p);
       lines.push(`(deny file-read* (literal "${ep}"))`);
       lines.push(`(deny file-read* (subpath "${ep}"))`);
+    }
+  }
+
+  if (config.allowRead && config.allowRead.length > 0) {
+    lines.push("; allowRead exceptions");
+    for (const p of config.allowRead) {
+      const ep = escapeSbplPath(p);
+      lines.push(`(allow file-read* (literal "${ep}"))`);
+      lines.push(`(allow file-read* (subpath "${ep}"))`);
     }
   }
 
@@ -175,7 +184,6 @@ export function buildBwrapSetup(
 
   args.push("--dev", "/dev");
   args.push("--proc", "/proc");
-  args.push("--tmpfs", "/tmp");
 
   const bindMounted = new Set<string>();
 
@@ -197,18 +205,37 @@ export function buildBwrapSetup(
     const readOnlyTmp = createReadOnlyDirOverlay();
     cleanupDirs.push(readOnlyTmp.cleanupDir);
     args.push("--ro-bind", readOnlyTmp.source, "/tmp");
+  } else {
+    args.push("--tmpfs", "/tmp");
   }
 
   // always mount workspace as read-only if not already covered
   const ws = stripTrailingSep(pathResolve(workspaceDir));
   if (existsSync(workspaceDir) && !isUnderBindRoot(ws, bindMounted)) {
     args.push("--ro-bind", workspaceDir, workspaceDir);
+    bindMounted.add(ws);
   }
 
   // denyWithin: ro-bind overlay on specific subpaths (order matters — later wins)
   for (const p of config.denyWithin) {
     if (existsSync(p)) {
       args.push("--ro-bind", p, p);
+    }
+  }
+
+  // allowRead binds before denyRead overlays so narrower deny mounts shadow broader allows.
+  // Skip paths already covered by a writable root — the existing --bind is sufficient for reads
+  // and a later --ro-bind would silently downgrade write access.
+  for (const p of (config.allowRead ?? [])) {
+    if (!existsSync(p)) continue;
+    const np = stripTrailingSep(p);
+    const coveredByWritable = config.writable.some((w) => {
+      const nw = stripTrailingSep(w);
+      return np === nw || np.startsWith(nw + "/");
+    });
+    if (!coveredByWritable) {
+      args.push("--ro-bind", p, p);
+      bindMounted.add(np);
     }
   }
 
@@ -221,7 +248,7 @@ export function buildBwrapSetup(
     args.push("--ro-bind", overlay.source, p);
   }
 
-  const chdirTarget = resolveChdirTarget(cwd, config.writable, workspaceDir);
+  const chdirTarget = resolveChdirTarget(cwd, bindMounted, workspaceDir);
   args.push("--chdir", chdirTarget);
   return {
     args,
@@ -270,14 +297,14 @@ function isUnderBindRoot(target: string, roots: Set<string>): boolean {
   return false;
 }
 
-function resolveChdirTarget(cwd: string, writable: string[], workspaceDir: string): string {
+function resolveChdirTarget(cwd: string, bindMounted: Set<string>, workspaceDir: string): string {
   const absCwd = pathResolve(cwd);
-  const roots = [...writable, ...SYSTEM_RO_BINDS, "/tmp", "/proc", "/dev", pathResolve(workspaceDir)];
+  const roots = new Set([...bindMounted, "/tmp", "/proc", "/dev", stripTrailingSep(pathResolve(workspaceDir))]);
   const normCwd = stripTrailingSep(absCwd);
 
+  if (roots.has(normCwd)) return absCwd;
   for (const root of roots) {
-    const r = stripTrailingSep(root);
-    if (normCwd === r || normCwd.startsWith(r + "/")) {
+    if (normCwd.startsWith(root + "/")) {
       return absCwd;
     }
   }

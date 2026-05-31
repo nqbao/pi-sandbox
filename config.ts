@@ -4,7 +4,7 @@ import { homedir, tmpdir } from "node:os";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { SandboxConfig, PathResolver, SandboxProviderType } from "./types.ts";
 export { isPathAllowed } from "./guard.ts";
-import { resolveRealPath } from "./guard.ts";
+import { resolveRealPath, stripTrailingSep } from "./guard.ts";
 
 const VALID_PROVIDERS = new Set<SandboxProviderType>(["auto", "sandbox-exec", "bubblewrap", "none"]);
 
@@ -36,7 +36,16 @@ export function createPathResolver(workspaceDir: string): PathResolver {
   };
 }
 
-const DEFAULT_DENY_READ: string[] = [];
+const DEFAULT_DENY_READ: string[] = [
+  "${HOME}/.ssh",
+  "${HOME}/.aws",
+  "${HOME}/.gnupg",
+  "${HOME}/.config/gcloud",
+  "${HOME}/.netrc",
+  "${HOME}/.git-credentials",
+  "/etc/shadow",
+  "/etc/sudoers",
+];
 const DEFAULT_WRITABLE = ["${WORKSPACE}", "${TMP}"];
 const DEFAULT_DENY_WITHIN = ["${WORKSPACE}/.git/hooks"];
 
@@ -48,7 +57,6 @@ export function getRequiredWritablePaths(pathResolver: PathResolver): string[] {
   return [
     resolve(pathResolver.resolve("${WORKSPACE}")),
     resolve(pathResolver.resolve("${TMP}")),
-    resolve(pathResolver.resolve("${HOME}/.pi")),
     resolve(getAgentDir()),
   ];
 }
@@ -70,11 +78,14 @@ export function loadConfig(workspaceDir: string): { config: SandboxConfig; pathR
     }
   }
 
+  const { denyRead, allowRead } = mergeDenyRead(raw.denyRead, raw.allowRead, pathResolver);
+
   return {
     config: {
       enabled: resolveEnabled(raw.enabled),
       readOnly: resolveReadOnly(raw.readOnly),
-      denyRead: mergeDenyRead(raw.denyRead, pathResolver),
+      allowRead,
+      denyRead,
       writable: mergeWritable(raw.writable, pathResolver),
       denyWithin: mergeDenyWithin(raw.denyWithin, pathResolver),
       network: raw.network ?? true,
@@ -97,10 +108,69 @@ function mergeWritable(raw: unknown, resolver: PathResolver): string[] {
   return [...new Set([...resolved, ...required])];
 }
 
-function mergeDenyRead(raw: unknown, resolver: PathResolver): string[] {
-  const resolved = resolveList(raw, [], resolver);
-  // DEFAULT_DENY_READ is empty; paths are already resolved by resolveList
-  return [...new Set(resolved)];
+export function computeEffectiveDenyRead(
+  userDenyRead: string[],
+  userAllowRead: string[],
+  resolvedDefaults: string[],
+): { effectiveDenyRead: string[]; effectiveAllowRead: string[]; conflicts: string[]; inconsistentAllow: string[] } {
+  const filteredDefaults = resolvedDefaults.filter(
+    (d) => !userAllowRead.some((a) => {
+      const na = stripTrailingSep(a);
+      const nd = stripTrailingSep(d);
+      return nd === na || nd.startsWith(na + "/");
+    }),
+  );
+
+  const conflicts = userAllowRead.filter((a) => {
+    const na = stripTrailingSep(a);
+    return userDenyRead.some((d) => {
+      const nd = stripTrailingSep(d);
+      return na === nd || na.startsWith(nd + "/");
+    });
+  });
+
+  const conflictSet = new Set(conflicts);
+  const effectiveDenyRead = [...new Set([...filteredDefaults, ...userDenyRead])];
+
+  // Detect allowRead entries that are children of effectiveDenyRead — these cannot be
+  // consistently enforced across OS-level sandbox providers, which operate on whole directories.
+  const inconsistentAllow: string[] = [];
+  const effectiveAllowRead = userAllowRead.filter((a) => {
+    if (conflictSet.has(a)) return false;
+    const na = stripTrailingSep(a);
+    const parentDeny = effectiveDenyRead.find((d) => {
+      const nd = stripTrailingSep(d);
+      return na.startsWith(nd + "/");
+    });
+    if (parentDeny) {
+      inconsistentAllow.push(a);
+      return false;
+    }
+    return true;
+  });
+
+  return { effectiveDenyRead, effectiveAllowRead, conflicts, inconsistentAllow };
+}
+
+function mergeDenyRead(
+  rawDeny: unknown,
+  rawAllow: unknown,
+  resolver: PathResolver,
+): { denyRead: string[]; allowRead: string[] } {
+  const userDenyRead = resolveList(rawDeny, [], resolver);
+  const userAllowRead = resolveList(rawAllow, [], resolver);
+  const resolvedDefaults = DEFAULT_DENY_READ.map((p) => resolveRealPath(resolver.resolve(p)));
+
+  const { effectiveDenyRead, effectiveAllowRead, conflicts, inconsistentAllow } = computeEffectiveDenyRead(userDenyRead, userAllowRead, resolvedDefaults);
+
+  for (const p of conflicts) {
+    console.warn(`[pi-sandbox] Path "${p}" is in both allowRead and denyRead — forcing deny`);
+  }
+  for (const p of inconsistentAllow) {
+    console.warn(`[pi-sandbox] allowRead "${p}" is inside a denied directory — specify the parent directory to allow the whole subtree`);
+  }
+
+  return { denyRead: effectiveDenyRead, allowRead: effectiveAllowRead };
 }
 
 function mergeDenyWithin(raw: unknown, resolver: PathResolver): string[] {

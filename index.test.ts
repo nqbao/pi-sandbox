@@ -17,11 +17,10 @@ describe("applyReadOnlyOverride", () => {
     assert.equal(applyReadOnlyOverride(config, undefined), config);
   });
 
-  it("forces writable paths off in read-only mode", () => {
+  it("preserves writable paths in read-only mode (readOnly gates --ro-bind vs --bind, not writable)", () => {
     assert.deepEqual(applyReadOnlyOverride(config, true), {
       ...config,
       readOnly: true,
-      writable: [],
     });
   });
 });

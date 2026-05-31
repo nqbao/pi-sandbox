@@ -210,6 +210,65 @@ describe("isPathAllowed", () => {
     assert.equal(isPathSearchable("/workspace", c), true);
   });
 
+  it("allowRead child path wins over a broader denyRead (most-specific-wins)", () => {
+    const c: SandboxConfig = {
+      enabled: true,
+      readOnly: false,
+      allowRead: [`${homedir()}/.ssh/config`],
+      denyRead: [`${homedir()}/.ssh`],
+      writable: ["/workspace"],
+      denyWithin: [],
+      network: true,
+    };
+    assert.equal(isPathReadable(`${homedir()}/.ssh/config`, c), true);
+    assert.equal(isPathReadable(`${homedir()}/.ssh/id_rsa`, c), false);
+    assert.equal(isPathSearchable(`${homedir()}/.ssh/config`, c), true);
+    assert.equal(isPathSearchable(`${homedir()}/.ssh`, c), false);
+  });
+
+  it("narrow denyRead wins over a broader allowRead (most-specific-wins)", () => {
+    const c: SandboxConfig = {
+      enabled: true,
+      readOnly: false,
+      allowRead: [homedir()],
+      denyRead: [`${homedir()}/.ssh`],
+      writable: ["/workspace"],
+      denyWithin: [],
+      network: true,
+    };
+    assert.equal(isPathReadable(`${homedir()}/.ssh/id_rsa`, c), false);
+    assert.equal(isPathReadable(`${homedir()}/.bashrc`, c), true);
+    assert.equal(isPathSearchable(`${homedir()}/.ssh`, c), false);
+  });
+
+  it("isPathSearchable blocks broad allowRead root that contains a denied descendant", () => {
+    const c: SandboxConfig = {
+      enabled: true,
+      readOnly: false,
+      allowRead: [homedir()],
+      denyRead: [`${homedir()}/.ssh`],
+      writable: ["/workspace"],
+      denyWithin: [],
+      network: true,
+    };
+    assert.equal(isPathSearchable(homedir(), c), false);
+    assert.equal(isPathSearchable(`${homedir()}/.bashrc`, c), true);
+  });
+
+  it("allowRead without conflicts lets the allowed path through denyRead", () => {
+    const c: SandboxConfig = {
+      enabled: true,
+      readOnly: false,
+      allowRead: [`${homedir()}/.ssh`],
+      denyRead: [],
+      writable: ["/workspace"],
+      denyWithin: [],
+      network: true,
+    };
+    assert.equal(isPathReadable(`${homedir()}/.ssh/config`, c), true);
+    assert.equal(isPathSearchable(`${homedir()}/.ssh`, c), true);
+  });
+
   it("blocks writes everywhere in read-only mode", () => {
     const c: SandboxConfig = {
       enabled: true,

@@ -65,20 +65,46 @@ export function isPathDenied(absolutePath: string, deniedRoots: string[]): boole
   return false;
 }
 
+function longestMatchingPrefix(absolutePath: string, roots: string[]): number {
+  const normPath = stripTrailingSep(resolve(absolutePath));
+  let best = -1;
+  for (const root of roots) {
+    const nr = stripTrailingSep(resolve(root));
+    if ((normPath === nr || normPath.startsWith(nr + "/")) && nr.length > best) {
+      best = nr.length;
+    }
+  }
+  return best;
+}
+
 export function isPathReadable(absolutePath: string, config: SandboxConfig): boolean {
-  return !isPathDenied(absolutePath, config.denyRead);
+  const allowLen = longestMatchingPrefix(absolutePath, config.allowRead ?? []);
+  const denyLen = longestMatchingPrefix(absolutePath, config.denyRead);
+  if (allowLen >= 0 && denyLen >= 0) return allowLen > denyLen;
+  if (allowLen >= 0) return true;
+  if (denyLen >= 0) return false;
+  return true;
 }
 
 export function isPathSearchable(absolutePath: string, config: SandboxConfig): boolean {
   const normPath = stripTrailingSep(resolve(absolutePath));
+  const allowRead = config.allowRead ?? [];
 
+  const allowLen = longestMatchingPrefix(absolutePath, allowRead);
+  const denyLen = longestMatchingPrefix(absolutePath, config.denyRead);
+
+  // If the path itself is denied and allow doesn't win, block immediately.
+  if (denyLen >= 0 && (allowLen < 0 || denyLen >= allowLen)) return false;
+
+  // Even when the path itself is allowed, block if it would traverse a denied
+  // descendant that isn't covered by a more-specific allowRead.
   for (const denied of config.denyRead) {
     const d = stripTrailingSep(resolve(denied));
-    if (normPath === d || normPath.startsWith(d + "/")) {
-      return false;
-    }
     if (d.startsWith(normPath + "/")) {
-      return false;
+      const dAllowLen = longestMatchingPrefix(d, allowRead);
+      const dDenyLen = longestMatchingPrefix(d, config.denyRead);
+      const effectivelyAllowed = dAllowLen >= 0 && (dDenyLen < 0 || dAllowLen > dDenyLen);
+      if (!effectivelyAllowed) return false;
     }
   }
 

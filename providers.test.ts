@@ -24,6 +24,25 @@ describe("buildSandboxExecProfile", () => {
     assert.match(profile, /\(deny file-read\* \(literal "\/Users\/test\/\.ssh"\)\)/);
   });
 
+  it("emits allowRead rules after denyRead rules", () => {
+    const config: SandboxConfig = {
+      enabled: true,
+      readOnly: false,
+      allowRead: ["/Users/test/.ssh"],
+      denyRead: ["/Users/test/.ssh"],
+      writable: ["/workspace"],
+      denyWithin: [],
+      network: true,
+    };
+
+    const profile = buildSandboxExecProfile(config);
+    const denyIndex = profile.indexOf('(deny file-read* (subpath "/Users/test/.ssh"))');
+    const allowIndex = profile.indexOf('(allow file-read* (subpath "/Users/test/.ssh"))');
+    assert.notEqual(denyIndex, -1);
+    assert.notEqual(allowIndex, -1);
+    assert.ok(allowIndex > denyIndex, "allowRead rules must appear after denyRead rules");
+  });
+
   it("does not emit writable paths when readOnly is true", () => {
     const config: SandboxConfig = {
       enabled: true,
@@ -93,6 +112,105 @@ describe("buildBwrapSetup", () => {
     } finally {
       rmSync(workspace, { recursive: true, force: true });
       rmSync(secretDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not emit --ro-bind for allowRead paths already covered by a writable root", () => {
+    const workspace = mkdtempSync(join(tmpdir(), "pi-sandbox-workspace-"));
+    try {
+      const config: SandboxConfig = {
+        enabled: true,
+        readOnly: false,
+        allowRead: [workspace],
+        denyRead: [],
+        writable: [workspace],
+        denyWithin: [],
+        network: true,
+      };
+
+      const setup = buildBwrapSetup(workspace, config, workspace);
+      try {
+        const roBindIndex = setup.args.findIndex(
+          (_arg, index) => setup.args[index] === "--ro-bind" && setup.args[index + 2] === workspace,
+        );
+        const bindIndex = setup.args.findIndex(
+          (_arg, index) => setup.args[index] === "--bind" && setup.args[index + 2] === workspace,
+        );
+        assert.notEqual(bindIndex, -1, "expected --bind for writable path");
+        assert.equal(roBindIndex, -1, "expected no --ro-bind for allowRead path covered by writable");
+      } finally {
+        setup.cleanup();
+      }
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves --chdir correctly when cwd is inside an allowRead directory", () => {
+    const workspace = mkdtempSync(join(tmpdir(), "pi-sandbox-workspace-"));
+    const roDir = mkdtempSync(join(tmpdir(), "pi-sandbox-ro-"));
+    const subDir = join(roDir, "sub");
+    mkdirSync(subDir);
+    try {
+      const config: SandboxConfig = {
+        enabled: true,
+        readOnly: false,
+        allowRead: [roDir],
+        denyRead: [],
+        writable: [workspace],
+        denyWithin: [],
+        network: true,
+      };
+
+      const setup = buildBwrapSetup(subDir, config, workspace);
+      try {
+        const chdirIndex = setup.args.indexOf("--chdir");
+        assert.notEqual(chdirIndex, -1);
+        assert.equal(setup.args[chdirIndex + 1], subDir);
+      } finally {
+        setup.cleanup();
+      }
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+      rmSync(roDir, { recursive: true, force: true });
+    }
+  });
+
+  it("bind-mounts allowRead paths before denyRead overlays so deny shadows allow", () => {
+    const workspace = mkdtempSync(join(tmpdir(), "pi-sandbox-workspace-"));
+    const parentDir = mkdtempSync(join(tmpdir(), "pi-sandbox-parent-"));
+    const childDir = join(parentDir, "child");
+    mkdirSync(childDir);
+    try {
+      const config: SandboxConfig = {
+        enabled: true,
+        readOnly: false,
+        allowRead: [parentDir],
+        denyRead: [childDir],
+        writable: [workspace],
+        denyWithin: [],
+        network: true,
+      };
+
+      const setup = buildBwrapSetup(workspace, config, workspace);
+      try {
+        const allowBindIndex = setup.args.findIndex(
+          (_arg, index) => setup.args[index] === "--ro-bind" && setup.args[index + 2] === parentDir,
+        );
+        const denyOverlayIndex = setup.args.findIndex(
+          (_arg, index) => setup.args[index] === "--ro-bind" && setup.args[index + 2] === childDir,
+        );
+        assert.notEqual(allowBindIndex, -1, "expected allowRead bind for parent");
+        assert.notEqual(denyOverlayIndex, -1, "expected denyRead overlay for child");
+        assert.ok(allowBindIndex < denyOverlayIndex, "allowRead bind must appear before denyRead overlay so deny shadows allow");
+        const denyOverlaySource = setup.args[denyOverlayIndex + 1];
+        assert.equal(statSync(denyOverlaySource).mode & 0o777, 0);
+      } finally {
+        setup.cleanup();
+      }
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+      rmSync(parentDir, { recursive: true, force: true });
     }
   });
 

@@ -26,7 +26,6 @@ export function applyReadOnlyOverride(config: ReturnType<typeof loadConfig>["con
   return {
     ...config,
     readOnly: readOnlyOverride,
-    writable: readOnlyOverride ? [] : config.writable,
   };
 }
 
@@ -302,8 +301,14 @@ export default function (pi: ExtensionAPI) {
         `Writable:`,
         ...(config.writable.length > 0 ? config.writable.map((p) => `  - ${p}`) : ["  - none"]),
       ];
+      if (config.allowRead.length > 0) {
+        lines.push("Allow-read:");
+        for (const p of config.allowRead) {
+          lines.push(`  - ${p}`);
+        }
+      }
       if (config.denyRead.length > 0) {
-        lines.push("Deny-read:");
+        lines.push("Deny-read (effective):");
         for (const p of config.denyRead) {
           lines.push(`  - ${p}`);
         }
