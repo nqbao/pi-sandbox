@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { loadConfig, getProtectedConfigPaths, getRequiredWritablePaths, resolveEnabled, resolveReadOnly, computeEffectiveDenyRead } from "./config.ts";
+import { loadConfig, getProtectedConfigPaths, getRequiredWritablePaths, resolveEnabled, resolveReadOnly, computeEffectiveDenyRead, mergeWritable, createPathResolver } from "./config.ts";
 import { isPathAllowed, resolveRealPath } from "./guard.ts";
 
 describe("resolveEnabled", () => {
@@ -78,6 +78,25 @@ describe("loadConfig", () => {
   });
 });
 
+describe("mergeWritable", () => {
+  const resolver = createPathResolver("/workspace");
+
+  it("includes DEFAULT_WRITABLE even when user specifies custom writable paths", () => {
+    const result = mergeWritable(["/custom/path"], resolver);
+    assert.equal(result.includes(resolveRealPath("/workspace")), true);
+    assert.equal(result.includes("/custom/path"), true);
+  });
+
+  it("user paths are additive, not a replacement for defaults", () => {
+    const withCustom = mergeWritable(["/extra"], resolver);
+    const withoutCustom = mergeWritable(undefined, resolver);
+    for (const p of withoutCustom) {
+      assert.equal(withCustom.includes(p), true, `expected default path ${p} to be present`);
+    }
+    assert.equal(withCustom.includes("/extra"), true);
+  });
+});
+
 describe("computeEffectiveDenyRead", () => {
   const defaults = ["/home/user/.ssh", "/home/user/.aws", "/etc/shadow"];
 
@@ -129,13 +148,14 @@ describe("computeEffectiveDenyRead", () => {
     assert.deepEqual(conflicts, []);
   });
 
-  it("detects conflict when denyRead is a parent of allowRead (allowRead is silently covered)", () => {
-    const { effectiveDenyRead, effectiveAllowRead, conflicts } = computeEffectiveDenyRead(
+  it("child-of-denyRead allowRead is caught by inconsistentAllow, not conflicts", () => {
+    const { effectiveDenyRead, effectiveAllowRead, conflicts, inconsistentAllow } = computeEffectiveDenyRead(
       ["/home/user"],
       ["/home/user/.ssh"],
       [],
     );
-    assert.deepEqual(conflicts, ["/home/user/.ssh"]);
+    assert.deepEqual(conflicts, []);
+    assert.deepEqual(inconsistentAllow, ["/home/user/.ssh"]);
     assert.equal(effectiveDenyRead.includes("/home/user"), true);
     assert.equal(effectiveAllowRead.includes("/home/user/.ssh"), false);
   });

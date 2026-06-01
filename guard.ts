@@ -101,9 +101,9 @@ export function isPathSearchable(absolutePath: string, config: SandboxConfig): b
   for (const denied of config.denyRead) {
     const d = stripTrailingSep(resolve(denied));
     if (d.startsWith(normPath + "/")) {
-      const dAllowLen = longestMatchingPrefix(d, allowRead);
-      const dDenyLen = longestMatchingPrefix(d, config.denyRead);
-      const effectivelyAllowed = dAllowLen >= 0 && (dDenyLen < 0 || dAllowLen > dDenyLen);
+      // d is always in config.denyRead, so its deny length equals d.length.
+      // allowRead must be strictly more specific (longer prefix) to win.
+      const effectivelyAllowed = longestMatchingPrefix(d, allowRead) > d.length;
       if (!effectivelyAllowed) return false;
     }
   }

@@ -102,10 +102,13 @@ function resolveList(raw: unknown, fallback: string[], resolver: PathResolver): 
   return fallback.map((p) => resolveRealPath(resolver.resolve(p)));
 }
 
-function mergeWritable(raw: unknown, resolver: PathResolver): string[] {
-  const resolved = resolveList(raw, DEFAULT_WRITABLE, resolver);
+export function mergeWritable(raw: unknown, resolver: PathResolver): string[] {
+  const userPaths = Array.isArray(raw)
+    ? raw.map((p) => resolveRealPath(resolver.resolve(String(p))))
+    : [];
+  const defaults = DEFAULT_WRITABLE.map((p) => resolveRealPath(resolver.resolve(p)));
   const required = getRequiredWritablePaths(resolver).map((p) => resolveRealPath(p));
-  return [...new Set([...resolved, ...required])];
+  return [...new Set([...userPaths, ...defaults, ...required])];
 }
 
 export function computeEffectiveDenyRead(
@@ -121,12 +124,11 @@ export function computeEffectiveDenyRead(
     }),
   );
 
+  // Exact-match conflicts only: child-of-deny cases are handled by inconsistentAllow below,
+  // which emits the correct "inside a denied directory" diagnostic.
   const conflicts = userAllowRead.filter((a) => {
     const na = stripTrailingSep(a);
-    return userDenyRead.some((d) => {
-      const nd = stripTrailingSep(d);
-      return na === nd || na.startsWith(nd + "/");
-    });
+    return userDenyRead.some((d) => na === stripTrailingSep(d));
   });
 
   const conflictSet = new Set(conflicts);

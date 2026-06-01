@@ -24,11 +24,11 @@ describe("buildSandboxExecProfile", () => {
     assert.match(profile, /\(deny file-read\* \(literal "\/Users\/test\/\.ssh"\)\)/);
   });
 
-  it("emits allowRead rules after denyRead rules", () => {
+  it("emits allowRead rules before denyRead rules so narrower denies win", () => {
     const config: SandboxConfig = {
       enabled: true,
       readOnly: false,
-      allowRead: ["/Users/test/.ssh"],
+      allowRead: ["/Users/test"],
       denyRead: ["/Users/test/.ssh"],
       writable: ["/workspace"],
       denyWithin: [],
@@ -36,11 +36,11 @@ describe("buildSandboxExecProfile", () => {
     };
 
     const profile = buildSandboxExecProfile(config);
+    const allowIndex = profile.indexOf('(allow file-read* (subpath "/Users/test"))');
     const denyIndex = profile.indexOf('(deny file-read* (subpath "/Users/test/.ssh"))');
-    const allowIndex = profile.indexOf('(allow file-read* (subpath "/Users/test/.ssh"))');
-    assert.notEqual(denyIndex, -1);
     assert.notEqual(allowIndex, -1);
-    assert.ok(allowIndex > denyIndex, "allowRead rules must appear after denyRead rules");
+    assert.notEqual(denyIndex, -1);
+    assert.ok(allowIndex < denyIndex, "allowRead rules must appear before denyRead rules so deny wins");
   });
 
   it("does not emit writable paths when readOnly is true", () => {

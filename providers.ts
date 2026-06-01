@@ -72,21 +72,21 @@ export function buildSandboxExecProfile(config: SandboxConfig): string {
     '(allow file-write* (path "/dev/autofs_nowait"))',
   ];
 
+  if (config.allowRead && config.allowRead.length > 0) {
+    lines.push("; allowRead exceptions (before denyRead so narrower denies win)");
+    for (const p of config.allowRead) {
+      const ep = escapeSbplPath(p);
+      lines.push(`(allow file-read* (literal "${ep}"))`);
+      lines.push(`(allow file-read* (subpath "${ep}"))`);
+    }
+  }
+
   if (config.denyRead.length > 0) {
     lines.push("; denied read paths");
     for (const p of config.denyRead) {
       const ep = escapeSbplPath(p);
       lines.push(`(deny file-read* (literal "${ep}"))`);
       lines.push(`(deny file-read* (subpath "${ep}"))`);
-    }
-  }
-
-  if (config.allowRead && config.allowRead.length > 0) {
-    lines.push("; allowRead exceptions");
-    for (const p of config.allowRead) {
-      const ep = escapeSbplPath(p);
-      lines.push(`(allow file-read* (literal "${ep}"))`);
-      lines.push(`(allow file-read* (subpath "${ep}"))`);
     }
   }
 
