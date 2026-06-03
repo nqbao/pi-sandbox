@@ -107,6 +107,7 @@ export function buildSandboxExecProfile(config: SandboxConfig): string {
   lines.push(
     "; mach services — missing entries cause hangs",
     "(allow mach-lookup",
+    '  (global-name "com.apple.system.opendirectoryd.libinfo")',
     '  (global-name "com.apple.logd")',
     '  (global-name "com.apple.system.logger")',
     '  (global-name "com.apple.system.opendirectoryd.api")',
