@@ -158,7 +158,10 @@ export default function (pi: ExtensionAPI) {
     const { config, enabled } = getState();
 
     if (!enabled) {
-      return;
+      return {
+        block: false,
+        reason: "",
+      };
     }
 
     if (isToolCallEventType("write", event)) {
@@ -191,7 +194,7 @@ export default function (pi: ExtensionAPI) {
     // When Pi adds built-in delete/move tools, these handlers activate automatically.
     if (isToolCallEventType("delete", event)) {
       const targetPath = event.input?.path ?? event.input?.filePath;
-      if (targetPath) {
+      if (typeof targetPath === "string") {
         const absolute = resolveRealPath(resolveToolPath(cwd, targetPath));
         if (!isPathAllowed(absolute, config)) {
           return {
@@ -205,7 +208,7 @@ export default function (pi: ExtensionAPI) {
     if (isToolCallEventType("move", event)) {
       const sourcePath = event.input?.path ?? event.input?.source;
       const destPath = event.input?.destination ?? event.input?.target;
-      if (sourcePath) {
+      if (typeof  sourcePath == "string") {
         const absolute = resolveRealPath(resolveToolPath(cwd, sourcePath));
         if (!isPathAllowed(absolute, config)) {
           return {
@@ -214,7 +217,7 @@ export default function (pi: ExtensionAPI) {
           };
         }
       }
-      if (destPath) {
+      if (typeof destPath == "string") {
         const absolute = resolveRealPath(resolveToolPath(cwd, destPath));
         if (!isPathAllowed(absolute, config)) {
           return {
@@ -270,6 +273,11 @@ export default function (pi: ExtensionAPI) {
         };
       }
     }
+
+    return {
+      block: false,
+      reason: "",
+    };
   });
 
   pi.on("session_start", async () => {
@@ -301,7 +309,7 @@ export default function (pi: ExtensionAPI) {
         `Writable:`,
         ...(config.writable.length > 0 ? config.writable.map((p) => `  - ${p}`) : ["  - none"]),
       ];
-      if (config.allowRead.length > 0) {
+      if (config.allowRead && config.allowRead.length > 0) {
         lines.push("Allow-read:");
         for (const p of config.allowRead) {
           lines.push(`  - ${p}`);

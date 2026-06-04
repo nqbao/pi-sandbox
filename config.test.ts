@@ -69,7 +69,7 @@ describe("loadConfig", () => {
   it("defaults denyRead to the resolved DEFAULT_DENY_READ paths", () => {
     const { config } = loadConfig("/workspace");
     assert.equal(config.denyRead.length > 0, true);
-    assert.equal(config.allowRead.length >= 1, true);
+    assert.equal(config.allowRead && config.allowRead.length >= 1, true);
   });
 
   it("defaults readOnly to false", () => {
