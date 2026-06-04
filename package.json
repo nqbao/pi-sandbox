@@ -26,7 +26,7 @@
     "@earendil-works/pi-coding-agent": "*"
   },
   "scripts": {
-    "test": "node --experimental-transform-types --test *.test.ts"
+    "test": "tsx --test *.test.ts"
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "*",
