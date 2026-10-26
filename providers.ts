@@ -2,7 +2,7 @@ import { chmodSync, existsSync, mkdtempSync, mkdirSync, readdirSync, rmSync, sta
 import { spawn } from "node:child_process";
 import { resolve as pathResolve, dirname, join } from "node:path";
 import { platform, tmpdir } from "node:os";
-import type { BashOperations } from "@earendil-works/pi-coding-agent";
+import { getShellConfig, type BashOperations } from "@earendil-works/pi-coding-agent";
 import type { SandboxProvider, SandboxConfig, SandboxProviderType } from "./types.ts";
 import { stripTrailingSep } from "./guard.ts";
 
@@ -421,6 +421,13 @@ class NoopProvider implements SandboxProvider {
   }
 }
 
+// Use the same shell as Pi's own bash tool (/bin/bash, then bash on PATH, then sh)
+// rather than /bin/sh, which is dash on Debian/Ubuntu and rejects bash syntax.
+export function buildSandboxedArgv(sandboxArgs: string[], command: string): string[] {
+  const { shell, args: shellArgs } = getShellConfig();
+  return [...sandboxArgs, "--", shell, ...shellArgs, command];
+}
+
 function spawnSandboxedCommand(
   binary: string,
   args: string[],
@@ -445,7 +452,7 @@ function spawnSandboxedCommand(
       cleanup?.();
     };
 
-    const child = spawn(binary, [...args, "--", "/bin/sh", "-c", command], {
+    const child = spawn(binary, buildSandboxedArgv(args, command), {
       cwd,
       detached: process.platform !== "win32",
       env: options.env ?? process.env,

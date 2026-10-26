@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildBwrapSetup, buildSandboxExecProfile } from "./providers.ts";
+import { buildBwrapSetup, buildSandboxExecProfile, buildSandboxedArgv } from "./providers.ts";
+import { getShellConfig } from "@earendil-works/pi-coding-agent";
 import type { SandboxConfig } from "./types.ts";
 
 describe("buildSandboxExecProfile", () => {
@@ -419,6 +420,17 @@ describe("buildBwrapSetup", () => {
       assert.equal(existsSync(join(root, ".pi")), false);
     } finally {
       rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("buildSandboxedArgv", () => {
+  it("runs the command with the same shell as Pi's bash tool, not /bin/sh", () => {
+    const { shell, args } = getShellConfig();
+    const argv = buildSandboxedArgv(["--ro-bind", "/usr", "/usr"], "[[ 1 == 1 ]] && echo ok");
+    assert.deepEqual(argv, ["--ro-bind", "/usr", "/usr", "--", shell, ...args, "[[ 1 == 1 ]] && echo ok"]);
+    if (existsSync("/bin/bash")) {
+      assert.equal(shell, "/bin/bash");
     }
   });
 });
