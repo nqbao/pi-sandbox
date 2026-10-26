@@ -1,7 +1,9 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { loadConfig, getProtectedConfigPaths, getProtectedPiPaths, getRequiredWritablePaths, resolveEnabled, resolveReadOnly, computeEffectiveDenyRead } from "./config.ts";
-import { isPathAllowed, resolveRealPath } from "./guard.ts";
+import { isPathAllowed, isPathReadable, resolveRealPath } from "./guard.ts";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
@@ -88,6 +90,42 @@ describe("loadConfig", () => {
     }
     // The rest of the agent dir (e.g. sessions, skills) stays writable.
     assert.equal(isPathAllowed(resolveRealPath(join(agentDir, "skills", "x", "SKILL.md")), config), true);
+  });
+
+  it("denies reading Pi API keys and common credential files by default", () => {
+    const { config } = loadConfig("/workspace");
+    const expected = [
+      join(getAgentDir(), "auth.json"),
+      join(homedir(), ".config", "gh", "hosts.yml"),
+      join(homedir(), ".npmrc"),
+      join(homedir(), ".docker", "config.json"),
+      join(homedir(), ".kube", "config"),
+    ];
+    for (const path of expected) {
+      assert.equal(isPathReadable(resolveRealPath(path), config), false, `expected ${path} to be unreadable`);
+    }
+  });
+
+  it("lets allowRead opt back into a default-denied credential path", () => {
+    const dir = mkdtempSync(join(tmpdir(), "pi-sandbox-agent-"));
+    const configPath = join(dir, "sandbox.json");
+    const previous = process.env.PI_CODING_AGENT_DIR;
+    writeFileSync(configPath, JSON.stringify({ allowRead: ["${HOME}/.npmrc"] }));
+    process.env.PI_CODING_AGENT_DIR = dir;
+    try {
+      const { config } = loadConfig("/workspace");
+      assert.equal(isPathReadable(resolveRealPath(join(homedir(), ".npmrc")), config), true);
+    } finally {
+      if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previous;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("write-protects .git/config by default", () => {
+    const { config } = loadConfig("/workspace");
+    assert.equal(isPathAllowed(resolveRealPath("/workspace/.git/config"), config), false);
+    assert.equal(isPathAllowed(resolveRealPath("/workspace/.git/index"), config), true);
   });
 
   it("exposes protected files and directories separately", () => {

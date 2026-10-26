@@ -43,11 +43,31 @@ const DEFAULT_DENY_READ: string[] = [
   "${HOME}/.config/gcloud",
   "${HOME}/.netrc",
   "${HOME}/.git-credentials",
+  // Developer tool and cloud CLI tokens
+  "${HOME}/.config/gh",
+  "${HOME}/.npmrc",
+  "${HOME}/.pypirc",
+  "${HOME}/.cargo/credentials.toml",
+  "${HOME}/.docker/config.json",
+  "${HOME}/.kube",
+  "${HOME}/.azure",
+  "${HOME}/.terraform.d/credentials.tfrc.json",
+  "${HOME}/.vault-token",
+  // Password managers
+  "${HOME}/.password-store",
+  "${HOME}/.config/op",
+  // Browser profiles and cookies (macOS)
+  "${HOME}/Library/Application Support/Google/Chrome",
+  "${HOME}/Library/Application Support/Firefox",
+  "${HOME}/Library/Cookies",
   "/etc/shadow",
   "/etc/sudoers",
 ];
+// Pi's API keys, relative to the agent dir.
+const DEFAULT_DENY_READ_AGENT_FILES = ["auth.json"];
 const DEFAULT_WRITABLE = ["${WORKSPACE}", "${TMP}"];
-const DEFAULT_DENY_WITHIN = ["${WORKSPACE}/.git/hooks"];
+// .git/config can run commands outside the sandbox (core.hooksPath, core.fsmonitor, core.sshCommand).
+const DEFAULT_DENY_WITHIN = ["${WORKSPACE}/.git/hooks", "${WORKSPACE}/.git/config"];
 
 export function getProtectedConfigPaths(): string[] {
   return CONFIG_SEARCH_PATHS.map((getPath) => resolve(getPath()));
@@ -185,7 +205,10 @@ function mergeDenyRead(
 ): { denyRead: string[]; allowRead: string[] } {
   const userDenyRead = resolveList(rawDeny, [], resolver);
   const userAllowRead = resolveList(rawAllow, [], resolver);
-  const resolvedDefaults = DEFAULT_DENY_READ.map((p) => resolveRealPath(resolver.resolve(p)));
+  const resolvedDefaults = [
+    ...DEFAULT_DENY_READ.map((p) => resolver.resolve(p)),
+    ...DEFAULT_DENY_READ_AGENT_FILES.map((name) => resolve(getAgentDir(), name)),
+  ].map((p) => resolveRealPath(p));
 
   const { effectiveDenyRead, effectiveAllowRead, conflicts, inconsistentAllow } = computeEffectiveDenyRead(userDenyRead, userAllowRead, resolvedDefaults);
 

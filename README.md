@@ -86,8 +86,14 @@ By default, the extension blocks reads from the following sensitive paths:
 - `${HOME}/.config/gcloud`
 - `${HOME}/.netrc`
 - `${HOME}/.git-credentials`
+- Developer tool and cloud CLI tokens: `${HOME}/.config/gh`, `${HOME}/.npmrc`, `${HOME}/.pypirc`, `${HOME}/.cargo/credentials.toml`, `${HOME}/.docker/config.json`, `${HOME}/.kube`, `${HOME}/.azure`, `${HOME}/.terraform.d/credentials.tfrc.json`, `${HOME}/.vault-token`
+- Password managers: `${HOME}/.password-store`, `${HOME}/.config/op`
+- Browser profiles and cookies (macOS): `${HOME}/Library/Application Support/Google/Chrome`, `${HOME}/Library/Application Support/Firefox`, `${HOME}/Library/Cookies`
+- Pi's API keys: `auth.json` in the Pi agent dir
 - `/etc/shadow`
 - `/etc/sudoers`
+
+Commands keep working without these files, but anything that needs the token fails. For example, `npm install` from the public registry still works while publishing does not, and `gh` and `kubectl` can't authenticate.
 
 Use `allowRead` to unblock any of these for a specific project. If a path appears in both `allowRead` and `denyRead`, deny wins and a warning is logged.
 
@@ -98,6 +104,7 @@ For recursive read tools like `grep` and `find`, pi-sandbox blocks starting from
 And blocks writes to:
 
 - `${WORKSPACE}/.git/hooks`
+- `${WORKSPACE}/.git/config`, because settings like `core.hooksPath`, `core.fsmonitor` and `core.sshCommand` run commands the next time you use git outside the sandbox. Everyday git commands (status, commit, branch, push) still work. Commands that change the repo config don't: `git config`, `git remote add`, and the upstream step of `git push -u` (the branch is pushed, but its upstream isn't saved). Run those yourself, or set `denyWithin` to replace the defaults.
 
 These Pi paths are always write-protected, whatever `writable` or `denyWithin` say, because Pi loads code, credentials, or trust decisions from them on the next start:
 
