@@ -1,12 +1,15 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { homedir } from "node:os";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   expandHomePath,
   isPathAllowed,
   isPathDenied,
   isPathReadable,
   isPathSearchable,
+  resolveRealPath,
   resolveToolPath,
   stripTrailingSep,
 } from "./guard.ts";
@@ -293,5 +296,63 @@ describe("isPathAllowed", () => {
     };
     assert.equal(isPathAllowed("/workspace/file.ts", c), false);
     assert.equal(isPathAllowed("/tmp/output", c), false);
+  });
+});
+
+describe("resolveRealPath", () => {
+  function withTree(fn: (root: string) => void) {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "pi-sandbox-realpath-")));
+    try {
+      mkdirSync(join(root, "ws"));
+      mkdirSync(join(root, "outside"));
+      fn(root);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+
+  it("resolves missing nested paths under a symlinked directory to the real target", () => {
+    withTree((root) => {
+      symlinkSync(join(root, "outside"), join(root, "ws", "link"));
+      assert.equal(
+        resolveRealPath(join(root, "ws", "link", "newdir", "deeper", "file.txt")),
+        join(root, "outside", "newdir", "deeper", "file.txt"),
+      );
+    });
+  });
+
+  it("follows dangling symlinks to the path they would create", () => {
+    withTree((root) => {
+      symlinkSync(join(root, "outside", "missing.ts"), join(root, "ws", "dangling"));
+      assert.equal(resolveRealPath(join(root, "ws", "dangling")), join(root, "outside", "missing.ts"));
+    });
+  });
+
+  it("keeps missing paths without symlinks inside their directory", () => {
+    withTree((root) => {
+      assert.equal(resolveRealPath(join(root, "ws", "a", "b.txt")), join(root, "ws", "a", "b.txt"));
+    });
+  });
+
+  it("terminates on symlink loops", () => {
+    withTree((root) => {
+      symlinkSync(join(root, "ws", "b"), join(root, "ws", "a"));
+      symlinkSync(join(root, "ws", "a"), join(root, "ws", "b"));
+      assert.equal(typeof resolveRealPath(join(root, "ws", "a", "file")), "string");
+    });
+  });
+
+  it("blocks writes that escape the writable root through a symlink", () => {
+    withTree((root) => {
+      symlinkSync(join(root, "outside"), join(root, "ws", "link"));
+      const config: SandboxConfig = {
+        enabled: true,
+        denyRead: [],
+        writable: [join(root, "ws")],
+        denyWithin: [],
+        network: true,
+      };
+      assert.equal(isPathAllowed(resolveRealPath(join(root, "ws", "link", "new", "file.txt")), config), false);
+    });
   });
 });

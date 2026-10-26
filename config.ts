@@ -4,7 +4,7 @@ import { homedir, tmpdir } from "node:os";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { SandboxConfig, PathResolver, SandboxProviderType } from "./types.ts";
 export { isPathAllowed } from "./guard.ts";
-import { resolveRealPath, stripTrailingSep } from "./guard.ts";
+import { expandHomePath, resolveRealPath, stripTrailingSep } from "./guard.ts";
 
 const VALID_PROVIDERS = new Set<SandboxProviderType>(["auto", "sandbox-exec", "bubblewrap", "none"]);
 
@@ -18,13 +18,14 @@ export function createPathResolver(workspaceDir: string): PathResolver {
   const vars: Record<string, string> = {
     WORKSPACE: workspaceDir,
     HOME: homedir(),
+    AGENT_DIR: getAgentDir(),
     TMP: tmpdir(),
     TMPDIR: tmpdir(),
   };
 
   return {
     resolve(path: string): string {
-      let resolved = path;
+      let resolved = expandHomePath(path);
       for (const [key, value] of Object.entries(vars)) {
         resolved = resolved.replaceAll(`\${${key}}`, value);
       }
@@ -43,14 +44,55 @@ const DEFAULT_DENY_READ: string[] = [
   "${HOME}/.config/gcloud",
   "${HOME}/.netrc",
   "${HOME}/.git-credentials",
+  // Developer tool and cloud CLI tokens
+  "${HOME}/.config/gh",
+  "${HOME}/.npmrc",
+  "${HOME}/.pypirc",
+  "${HOME}/.cargo/credentials.toml",
+  "${HOME}/.docker/config.json",
+  "${HOME}/.kube",
+  "${HOME}/.azure",
+  "${HOME}/.terraform.d/credentials.tfrc.json",
+  "${HOME}/.vault-token",
+  // Password managers
+  "${HOME}/.password-store",
+  "${HOME}/.config/op",
+  // Browser profiles and cookies (macOS)
+  "${HOME}/Library/Application Support/Google/Chrome",
+  "${HOME}/Library/Application Support/Firefox",
+  "${HOME}/Library/Cookies",
   "/etc/shadow",
   "/etc/sudoers",
 ];
+// Pi's API keys, relative to the agent dir.
+const DEFAULT_DENY_READ_AGENT_FILES = ["auth.json"];
 const DEFAULT_WRITABLE = ["${WORKSPACE}", "${TMP}"];
-const DEFAULT_DENY_WITHIN = ["${WORKSPACE}/.git/hooks"];
+// .git/config can run commands outside the sandbox (core.hooksPath, core.fsmonitor, core.sshCommand).
+const DEFAULT_DENY_WITHIN = ["${WORKSPACE}/.git/hooks", "${WORKSPACE}/.git/config"];
 
 export function getProtectedConfigPaths(): string[] {
   return CONFIG_SEARCH_PATHS.map((getPath) => resolve(getPath()));
+}
+
+// Files and directories Pi loads code, credentials, or trust decisions from. The agent must
+// not be able to write these, or it could plant something that runs unsandboxed on next start.
+const PROTECTED_AGENT_FILES = ["settings.json", "trust.json", "mcp.json", "models.json", "auth.json"];
+const PROTECTED_AGENT_DIRS = ["extensions", "npm", "git"];
+const PROJECT_CONFIG_DIR = ".pi";
+
+export function getProtectedPiPaths(workspaceDir: string): { files: string[]; dirs: string[] } {
+  const agentDir = resolve(getAgentDir());
+  return {
+    files: [
+      ...getProtectedConfigPaths(),
+      ...PROTECTED_AGENT_FILES.map((name) => resolve(agentDir, name)),
+    ],
+    dirs: [
+      ...PROTECTED_AGENT_DIRS.map((name) => resolve(agentDir, name)),
+      // Project-local extensions, packages, settings, and prompts all live here.
+      resolve(workspaceDir, PROJECT_CONFIG_DIR),
+    ],
+  };
 }
 
 export function getRequiredWritablePaths(pathResolver: PathResolver): string[] {
@@ -79,6 +121,9 @@ export function loadConfig(workspaceDir: string): { config: SandboxConfig; pathR
   }
 
   const { denyRead, allowRead } = mergeDenyRead(raw.denyRead, raw.allowRead, pathResolver);
+  const protectedPaths = getProtectedPiPaths(workspaceDir);
+  const protectedFiles = resolveUnique(protectedPaths.files);
+  const protectedDirs = resolveUnique(protectedPaths.dirs);
 
   return {
     config: {
@@ -87,7 +132,9 @@ export function loadConfig(workspaceDir: string): { config: SandboxConfig; pathR
       allowRead,
       denyRead,
       writable: mergeWritable(raw.writable, pathResolver),
-      denyWithin: mergeDenyWithin(raw.denyWithin, pathResolver),
+      denyWithin: mergeDenyWithin(raw.denyWithin, pathResolver, [...protectedFiles, ...protectedDirs]),
+      protectedFiles,
+      protectedDirs,
       network: raw.network ?? true,
       provider: resolveProvider(raw.provider),
     },
@@ -159,7 +206,10 @@ function mergeDenyRead(
 ): { denyRead: string[]; allowRead: string[] } {
   const userDenyRead = resolveList(rawDeny, [], resolver);
   const userAllowRead = resolveList(rawAllow, [], resolver);
-  const resolvedDefaults = DEFAULT_DENY_READ.map((p) => resolveRealPath(resolver.resolve(p)));
+  const resolvedDefaults = [
+    ...DEFAULT_DENY_READ.map((p) => resolver.resolve(p)),
+    ...DEFAULT_DENY_READ_AGENT_FILES.map((name) => resolve(getAgentDir(), name)),
+  ].map((p) => resolveRealPath(p));
 
   const { effectiveDenyRead, effectiveAllowRead, conflicts, inconsistentAllow } = computeEffectiveDenyRead(userDenyRead, userAllowRead, resolvedDefaults);
 
@@ -173,9 +223,12 @@ function mergeDenyRead(
   return { denyRead: effectiveDenyRead, allowRead: effectiveAllowRead };
 }
 
-function mergeDenyWithin(raw: unknown, resolver: PathResolver): string[] {
+function resolveUnique(paths: string[]): string[] {
+  return [...new Set(paths.map((p) => resolveRealPath(p)))];
+}
+
+function mergeDenyWithin(raw: unknown, resolver: PathResolver, protectedPaths: string[]): string[] {
   const resolved = resolveList(raw, DEFAULT_DENY_WITHIN, resolver);
-  const protectedPaths = getProtectedConfigPaths().map((p) => resolveRealPath(p));
   return [...new Set([...resolved, ...protectedPaths])];
 }
 

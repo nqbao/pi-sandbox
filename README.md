@@ -69,7 +69,8 @@ Example:
 Available path variables:
 
 - `${WORKSPACE}`: the current project directory
-- `${HOME}`: your home directory
+- `${HOME}`: your home directory (a leading `~/` works too)
+- `${AGENT_DIR}`: the Pi agent directory (`~/.pi/agent` by default)
 - `${TMP}` and `${TMPDIR}`: the system temporary directory
 
 By default, the extension allows writes to:
@@ -86,10 +87,22 @@ By default, the extension blocks reads from the following sensitive paths:
 - `${HOME}/.config/gcloud`
 - `${HOME}/.netrc`
 - `${HOME}/.git-credentials`
+- Developer tool and cloud CLI tokens: `${HOME}/.config/gh`, `${HOME}/.npmrc`, `${HOME}/.pypirc`, `${HOME}/.cargo/credentials.toml`, `${HOME}/.docker/config.json`, `${HOME}/.kube`, `${HOME}/.azure`, `${HOME}/.terraform.d/credentials.tfrc.json`, `${HOME}/.vault-token`
+- Password managers: `${HOME}/.password-store`, `${HOME}/.config/op`
+- Browser profiles and cookies (macOS): `${HOME}/Library/Application Support/Google/Chrome`, `${HOME}/Library/Application Support/Firefox`, `${HOME}/Library/Cookies`
+- Pi's API keys: `auth.json` in the Pi agent dir
 - `/etc/shadow`
 - `/etc/sudoers`
 
-Use `allowRead` to unblock any of these for a specific project. If a path appears in both `allowRead` and `denyRead`, deny wins and a warning is logged.
+Commands keep working without these files, but anything that needs the token fails. For example, `npm install` from the public registry still works while publishing does not, and `gh` and `kubectl` can't authenticate.
+
+Use `allowRead` to unblock any of these. `sandbox.json` is global, so this applies to every project. To unblock a denied directory such as `${HOME}/.kube`, list the directory itself; an entry for a file inside it is ignored with a warning. If a path appears in both `allowRead` and `denyRead`, deny wins and a warning is logged.
+
+```json
+{
+  "allowRead": ["~/.npmrc", "${HOME}/.kube", "${AGENT_DIR}/auth.json"]
+}
+```
 
 `--sandbox-readonly` is a quick way to disable all filesystem writes regardless of `writable`, while keeping read access governed by the existing deny policy.
 
@@ -98,6 +111,16 @@ For recursive read tools like `grep` and `find`, pi-sandbox blocks starting from
 And blocks writes to:
 
 - `${WORKSPACE}/.git/hooks`
+- `${WORKSPACE}/.git/config`, because settings like `core.hooksPath`, `core.fsmonitor` and `core.sshCommand` run commands the next time you use git outside the sandbox. Everyday git commands (status, commit, branch, push) still work. Commands that change the repo config don't: `git config`, `git remote add`, and the upstream step of `git push -u` (the branch is pushed, but its upstream isn't saved). Run those yourself, or set `denyWithin` to replace the defaults.
+
+These Pi paths are always write-protected, whatever `writable` or `denyWithin` say, because Pi loads code, credentials, or trust decisions from them on the next start:
+
+- `${WORKSPACE}/.pi` (project extensions, packages, settings, prompts)
+- in the Pi agent dir: `extensions/`, `npm/`, `git/`, `settings.json`, `trust.json`, `mcp.json`, `models.json`, `auth.json`, `sandbox.json`
+
+On Linux, bubblewrap can only mount existing paths read-only. So before a bash command runs, a missing protected directory is created empty (for example an empty `.pi/` in the workspace). If a protected file is missing, its parent directory is mounted read-only for that command; the parent's existing entries stay writable.
+
+Paths are resolved through symlinks before they are checked, including paths that don't exist yet, so a write through a symlinked directory is checked against its real target.
 
 ## Status Command
 

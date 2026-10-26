@@ -1,6 +1,6 @@
-import { chmodSync, existsSync, mkdtempSync, mkdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
-import { resolve as pathResolve, join } from "node:path";
+import { resolve as pathResolve, dirname, join } from "node:path";
 import { platform, tmpdir } from "node:os";
 import type { BashOperations } from "@earendil-works/pi-coding-agent";
 import type { SandboxProvider, SandboxConfig, SandboxProviderType } from "./types.ts";
@@ -216,6 +216,10 @@ export function buildBwrapSetup(
     bindMounted.add(ws);
   }
 
+  if (!config.readOnly) {
+    protectMissingPaths(args, config);
+  }
+
   // denyWithin: ro-bind overlay on specific subpaths (order matters — later wins)
   for (const p of config.denyWithin) {
     if (existsSync(p)) {
@@ -262,6 +266,53 @@ export function buildBwrapSetup(
       }
     },
   };
+}
+
+// bwrap can only overlay paths that exist, so a protected Pi path that doesn't exist yet
+// could be created from bash. Missing directories are created empty on the host so the
+// denyWithin pass can mount them read-only. For a missing file, its parent is mounted
+// read-only with the parent's existing children re-bound writable, which blocks creating
+// new entries there without touching the host.
+function protectMissingPaths(args: string[], config: SandboxConfig): void {
+  const isMissing = (p: string) => !existsSync(p) && isUnderExistingRoot(p, config.writable);
+  const lockParentOf = (config.protectedFiles ?? []).filter(isMissing);
+
+  for (const dir of (config.protectedDirs ?? []).filter(isMissing)) {
+    try {
+      mkdirSync(dir, { recursive: true });
+    } catch {
+      // can't create it on the host; lock its parent instead
+      lockParentOf.push(dir);
+    }
+  }
+
+  const lockedParents = new Set<string>();
+  for (const path of lockParentOf) {
+    const parent = dirname(path);
+    if (lockedParents.has(parent)) {
+      continue;
+    }
+    try {
+      mkdirSync(parent, { recursive: true });
+    } catch {
+      // parent can't be created on the host; then it can't be created in the sandbox either
+      continue;
+    }
+    lockedParents.add(parent);
+    args.push("--ro-bind", parent, parent);
+    for (const child of readdirSync(parent)) {
+      const childPath = join(parent, child);
+      args.push("--bind", childPath, childPath);
+    }
+  }
+}
+
+function isUnderExistingRoot(target: string, roots: string[]): boolean {
+  const t = stripTrailingSep(target);
+  return roots.some((root) => {
+    const r = stripTrailingSep(root);
+    return (t === r || t.startsWith(r + "/")) && existsSync(r);
+  });
 }
 
 function createDenyReadOverlay(targetPath: string): { source: string; cleanupDir: string } {

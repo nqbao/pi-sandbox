@@ -13,6 +13,10 @@ export interface SandboxConfig {
   writable: string[];
   /** Paths explicitly denied for writes, even inside writable directories (e.g. .git/hooks). */
   denyWithin: string[];
+  /** Pi config files that are always write-protected (also included in denyWithin). */
+  protectedFiles?: string[];
+  /** Pi code/config directories that are always write-protected (also included in denyWithin). */
+  protectedDirs?: string[];
   /** Allow outbound network access. Default: true. */
   network: boolean;
   /** Force a specific provider: "auto" | "sandbox-exec" | "bubblewrap" | "none". Default: "auto". */

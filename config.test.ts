@@ -1,7 +1,11 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { loadConfig, getProtectedConfigPaths, getRequiredWritablePaths, resolveEnabled, resolveReadOnly, computeEffectiveDenyRead } from "./config.ts";
-import { isPathAllowed, resolveRealPath } from "./guard.ts";
+import { createPathResolver, loadConfig, getProtectedConfigPaths, getProtectedPiPaths, getRequiredWritablePaths, resolveEnabled, resolveReadOnly, computeEffectiveDenyRead } from "./config.ts";
+import { isPathAllowed, isPathReadable, resolveRealPath } from "./guard.ts";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { join } from "node:path";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
 describe("resolveEnabled", () => {
   it("defaults to enabled", () => {
@@ -22,6 +26,23 @@ describe("resolveReadOnly", () => {
   it("accepts explicit booleans", () => {
     assert.equal(resolveReadOnly(true), true);
     assert.equal(resolveReadOnly(false), false);
+  });
+});
+
+describe("createPathResolver", () => {
+  const resolver = createPathResolver("/workspace");
+
+  it("expands a leading ~ to the home directory", () => {
+    assert.equal(resolver.resolve("~/.npmrc"), join(homedir(), ".npmrc"));
+    assert.equal(resolver.resolve("~"), homedir());
+  });
+
+  it("does not expand ~ in the middle of a path", () => {
+    assert.equal(resolver.resolve("a/~/b"), "/workspace/a/~/b");
+  });
+
+  it("expands ${AGENT_DIR} to the Pi agent directory", () => {
+    assert.equal(resolver.resolve("${AGENT_DIR}/auth.json"), join(getAgentDir(), "auth.json"));
   });
 });
 
@@ -63,6 +84,76 @@ describe("loadConfig", () => {
       const realPath = resolveRealPath(path);
       assert.equal(config.denyWithin.includes(realPath), true);
       assert.equal(isPathAllowed(realPath, config), false);
+    }
+  });
+
+  it("write-protects Pi extension, package, settings, and trust paths", () => {
+    const { config } = loadConfig("/workspace");
+    const agentDir = getAgentDir();
+    const expected = [
+      join(agentDir, "extensions", "evil.ts"),
+      join(agentDir, "npm", "node_modules", "pkg", "index.js"),
+      join(agentDir, "git", "repo", "index.ts"),
+      join(agentDir, "settings.json"),
+      join(agentDir, "trust.json"),
+      join(agentDir, "mcp.json"),
+      join(agentDir, "models.json"),
+      join(agentDir, "auth.json"),
+      "/workspace/.pi/extensions/evil.ts",
+      "/workspace/.pi/settings.json",
+    ];
+    for (const path of expected) {
+      assert.equal(isPathAllowed(resolveRealPath(path), config), false, `expected ${path} to be write-protected`);
+    }
+    // The rest of the agent dir (e.g. sessions, skills) stays writable.
+    assert.equal(isPathAllowed(resolveRealPath(join(agentDir, "skills", "x", "SKILL.md")), config), true);
+  });
+
+  it("denies reading Pi API keys and common credential files by default", () => {
+    const { config } = loadConfig("/workspace");
+    const expected = [
+      join(getAgentDir(), "auth.json"),
+      join(homedir(), ".config", "gh", "hosts.yml"),
+      join(homedir(), ".npmrc"),
+      join(homedir(), ".docker", "config.json"),
+      join(homedir(), ".kube", "config"),
+    ];
+    for (const path of expected) {
+      assert.equal(isPathReadable(resolveRealPath(path), config), false, `expected ${path} to be unreadable`);
+    }
+  });
+
+  it("lets allowRead opt back into a default-denied credential path", () => {
+    const dir = mkdtempSync(join(tmpdir(), "pi-sandbox-agent-"));
+    const configPath = join(dir, "sandbox.json");
+    const previous = process.env.PI_CODING_AGENT_DIR;
+    writeFileSync(configPath, JSON.stringify({ allowRead: ["~/.npmrc", "${AGENT_DIR}/auth.json"] }));
+    process.env.PI_CODING_AGENT_DIR = dir;
+    try {
+      const { config } = loadConfig("/workspace");
+      assert.equal(isPathReadable(resolveRealPath(join(homedir(), ".npmrc")), config), true);
+      assert.equal(isPathReadable(resolveRealPath(join(dir, "auth.json")), config), true);
+    } finally {
+      if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previous;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("write-protects .git/config by default", () => {
+    const { config } = loadConfig("/workspace");
+    assert.equal(isPathAllowed(resolveRealPath("/workspace/.git/config"), config), false);
+    assert.equal(isPathAllowed(resolveRealPath("/workspace/.git/index"), config), true);
+  });
+
+  it("exposes protected files and directories separately", () => {
+    const { config } = loadConfig("/workspace");
+    const { files, dirs } = getProtectedPiPaths("/workspace");
+    for (const path of files) {
+      assert.ok(config.protectedFiles?.includes(resolveRealPath(path)), `expected ${path} in protectedFiles`);
+    }
+    for (const path of dirs) {
+      assert.ok(config.protectedDirs?.includes(resolveRealPath(path)), `expected ${path} in protectedDirs`);
     }
   });
 
