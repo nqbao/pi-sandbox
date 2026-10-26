@@ -4,7 +4,7 @@ import { homedir, tmpdir } from "node:os";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { SandboxConfig, PathResolver, SandboxProviderType } from "./types.ts";
 export { isPathAllowed } from "./guard.ts";
-import { resolveRealPath, stripTrailingSep } from "./guard.ts";
+import { expandHomePath, resolveRealPath, stripTrailingSep } from "./guard.ts";
 
 const VALID_PROVIDERS = new Set<SandboxProviderType>(["auto", "sandbox-exec", "bubblewrap", "none"]);
 
@@ -18,13 +18,14 @@ export function createPathResolver(workspaceDir: string): PathResolver {
   const vars: Record<string, string> = {
     WORKSPACE: workspaceDir,
     HOME: homedir(),
+    AGENT_DIR: getAgentDir(),
     TMP: tmpdir(),
     TMPDIR: tmpdir(),
   };
 
   return {
     resolve(path: string): string {
-      let resolved = path;
+      let resolved = expandHomePath(path);
       for (const [key, value] of Object.entries(vars)) {
         resolved = resolved.replaceAll(`\${${key}}`, value);
       }

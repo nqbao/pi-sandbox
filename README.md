@@ -69,7 +69,8 @@ Example:
 Available path variables:
 
 - `${WORKSPACE}`: the current project directory
-- `${HOME}`: your home directory
+- `${HOME}`: your home directory (a leading `~/` works too)
+- `${AGENT_DIR}`: the Pi agent directory (`~/.pi/agent` by default)
 - `${TMP}` and `${TMPDIR}`: the system temporary directory
 
 By default, the extension allows writes to:
@@ -95,7 +96,13 @@ By default, the extension blocks reads from the following sensitive paths:
 
 Commands keep working without these files, but anything that needs the token fails. For example, `npm install` from the public registry still works while publishing does not, and `gh` and `kubectl` can't authenticate.
 
-Use `allowRead` to unblock any of these for a specific project. If a path appears in both `allowRead` and `denyRead`, deny wins and a warning is logged.
+Use `allowRead` to unblock any of these. `sandbox.json` is global, so this applies to every project. To unblock a denied directory such as `${HOME}/.kube`, list the directory itself; an entry for a file inside it is ignored with a warning. If a path appears in both `allowRead` and `denyRead`, deny wins and a warning is logged.
+
+```json
+{
+  "allowRead": ["~/.npmrc", "${HOME}/.kube", "${AGENT_DIR}/auth.json"]
+}
+```
 
 `--sandbox-readonly` is a quick way to disable all filesystem writes regardless of `writable`, while keeping read access governed by the existing deny policy.
 

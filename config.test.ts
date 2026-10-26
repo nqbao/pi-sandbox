@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { loadConfig, getProtectedConfigPaths, getProtectedPiPaths, getRequiredWritablePaths, resolveEnabled, resolveReadOnly, computeEffectiveDenyRead } from "./config.ts";
+import { createPathResolver, loadConfig, getProtectedConfigPaths, getProtectedPiPaths, getRequiredWritablePaths, resolveEnabled, resolveReadOnly, computeEffectiveDenyRead } from "./config.ts";
 import { isPathAllowed, isPathReadable, resolveRealPath } from "./guard.ts";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
@@ -26,6 +26,23 @@ describe("resolveReadOnly", () => {
   it("accepts explicit booleans", () => {
     assert.equal(resolveReadOnly(true), true);
     assert.equal(resolveReadOnly(false), false);
+  });
+});
+
+describe("createPathResolver", () => {
+  const resolver = createPathResolver("/workspace");
+
+  it("expands a leading ~ to the home directory", () => {
+    assert.equal(resolver.resolve("~/.npmrc"), join(homedir(), ".npmrc"));
+    assert.equal(resolver.resolve("~"), homedir());
+  });
+
+  it("does not expand ~ in the middle of a path", () => {
+    assert.equal(resolver.resolve("a/~/b"), "/workspace/a/~/b");
+  });
+
+  it("expands ${AGENT_DIR} to the Pi agent directory", () => {
+    assert.equal(resolver.resolve("${AGENT_DIR}/auth.json"), join(getAgentDir(), "auth.json"));
   });
 });
 
@@ -110,11 +127,12 @@ describe("loadConfig", () => {
     const dir = mkdtempSync(join(tmpdir(), "pi-sandbox-agent-"));
     const configPath = join(dir, "sandbox.json");
     const previous = process.env.PI_CODING_AGENT_DIR;
-    writeFileSync(configPath, JSON.stringify({ allowRead: ["${HOME}/.npmrc"] }));
+    writeFileSync(configPath, JSON.stringify({ allowRead: ["~/.npmrc", "${AGENT_DIR}/auth.json"] }));
     process.env.PI_CODING_AGENT_DIR = dir;
     try {
       const { config } = loadConfig("/workspace");
       assert.equal(isPathReadable(resolveRealPath(join(homedir(), ".npmrc")), config), true);
+      assert.equal(isPathReadable(resolveRealPath(join(dir, "auth.json")), config), true);
     } finally {
       if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
       else process.env.PI_CODING_AGENT_DIR = previous;
