@@ -102,8 +102,15 @@ describe("buildBwrapSetup", () => {
         const dirOverlaySource = setup.args[dirOverlayIndex + 1];
         assert.equal(statSync(fileOverlaySource).mode & 0o777, 0);
         assert.equal(statSync(dirOverlaySource).mode & 0o777, 0);
-        assert.throws(() => readFileSync(fileOverlaySource, "utf8"));
-        assert.throws(() => readdirSync(dirOverlaySource));
+        // The overlays hide the secrets by being empty; mode 000 also makes them unreadable
+        // for non-root users. Root ignores file permissions, so only emptiness applies there.
+        if (process.getuid?.() === 0) {
+          assert.equal(readFileSync(fileOverlaySource, "utf8"), "");
+          assert.deepEqual(readdirSync(dirOverlaySource), []);
+        } else {
+          assert.throws(() => readFileSync(fileOverlaySource, "utf8"));
+          assert.throws(() => readdirSync(dirOverlaySource));
+        }
         assert.equal(setup.args.includes("--chdir"), true);
         assert.equal(setup.args.includes("--"), false);
       } finally {
