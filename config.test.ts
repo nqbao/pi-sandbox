@@ -90,12 +90,14 @@ describe("loadConfig", () => {
     assert.equal(isPathAllowed(resolveRealPath(join(agentDir, "skills", "x", "SKILL.md")), config), true);
   });
 
-  it("exposes protected paths with their kind", () => {
+  it("exposes protected files and directories separately", () => {
     const { config } = loadConfig("/workspace");
-    for (const entry of getProtectedPiPaths("/workspace")) {
-      const match = config.protectedPaths?.find((p) => p.path === resolveRealPath(entry.path));
-      assert.ok(match, `expected ${entry.path} in protectedPaths`);
-      assert.equal(match.kind, entry.kind);
+    const { files, dirs } = getProtectedPiPaths("/workspace");
+    for (const path of files) {
+      assert.ok(config.protectedFiles?.includes(resolveRealPath(path)), `expected ${path} in protectedFiles`);
+    }
+    for (const path of dirs) {
+      assert.ok(config.protectedDirs?.includes(resolveRealPath(path)), `expected ${path} in protectedDirs`);
     }
   });
 

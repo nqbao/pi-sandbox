@@ -294,11 +294,8 @@ describe("buildBwrapSetup", () => {
         denyRead: [],
         writable: [workspace, agentDir],
         denyWithin: [join(workspace, ".pi"), join(agentDir, "extensions"), join(agentDir, "settings.json")],
-        protectedPaths: [
-          { path: join(workspace, ".pi"), kind: "dir" },
-          { path: join(agentDir, "extensions"), kind: "dir" },
-          { path: join(agentDir, "settings.json"), kind: "file" },
-        ],
+        protectedFiles: [join(agentDir, "settings.json")],
+        protectedDirs: [join(workspace, ".pi"), join(agentDir, "extensions")],
         network: true,
       };
 
@@ -338,7 +335,7 @@ describe("buildBwrapSetup", () => {
         denyRead: [],
         writable: [root],
         denyWithin: [join(root, ".pi")],
-        protectedPaths: [{ path: join(root, ".pi"), kind: "dir" }],
+        protectedDirs: [join(root, ".pi")],
         network: true,
       };
       const setup = buildBwrapSetup(root, config, root);

@@ -274,20 +274,21 @@ export function buildBwrapSetup(
 // read-only with the parent's existing children re-bound writable, which blocks creating
 // new entries there without touching the host.
 function protectMissingPaths(args: string[], config: SandboxConfig): void {
+  const isMissing = (p: string) => !existsSync(p) && isUnderExistingRoot(p, config.writable);
+  const lockParentOf = (config.protectedFiles ?? []).filter(isMissing);
+
+  for (const dir of (config.protectedDirs ?? []).filter(isMissing)) {
+    try {
+      mkdirSync(dir, { recursive: true });
+    } catch {
+      // can't create it on the host; lock its parent instead
+      lockParentOf.push(dir);
+    }
+  }
+
   const lockedParents = new Set<string>();
-  for (const entry of config.protectedPaths ?? []) {
-    if (existsSync(entry.path) || !isUnderExistingRoot(entry.path, config.writable)) {
-      continue;
-    }
-    if (entry.kind === "dir") {
-      try {
-        mkdirSync(entry.path, { recursive: true });
-        continue;
-      } catch {
-        // fall through and lock the parent instead
-      }
-    }
-    const parent = dirname(entry.path);
+  for (const path of lockParentOf) {
+    const parent = dirname(path);
     if (lockedParents.has(parent)) {
       continue;
     }

@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { resolve, isAbsolute } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import type { SandboxConfig, PathResolver, ProtectedPath, SandboxProviderType } from "./types.ts";
+import type { SandboxConfig, PathResolver, SandboxProviderType } from "./types.ts";
 export { isPathAllowed } from "./guard.ts";
 import { resolveRealPath, stripTrailingSep } from "./guard.ts";
 
@@ -59,15 +59,19 @@ const PROTECTED_AGENT_FILES = ["settings.json", "trust.json", "mcp.json", "model
 const PROTECTED_AGENT_DIRS = ["extensions", "npm", "git"];
 const PROJECT_CONFIG_DIR = ".pi";
 
-export function getProtectedPiPaths(workspaceDir: string): ProtectedPath[] {
+export function getProtectedPiPaths(workspaceDir: string): { files: string[]; dirs: string[] } {
   const agentDir = resolve(getAgentDir());
-  return [
-    ...getProtectedConfigPaths().map((path) => ({ path, kind: "file" as const })),
-    ...PROTECTED_AGENT_FILES.map((name) => ({ path: resolve(agentDir, name), kind: "file" as const })),
-    ...PROTECTED_AGENT_DIRS.map((name) => ({ path: resolve(agentDir, name), kind: "dir" as const })),
-    // Project-local extensions, packages, settings, and prompts all live here.
-    { path: resolve(workspaceDir, PROJECT_CONFIG_DIR), kind: "dir" as const },
-  ];
+  return {
+    files: [
+      ...getProtectedConfigPaths(),
+      ...PROTECTED_AGENT_FILES.map((name) => resolve(agentDir, name)),
+    ],
+    dirs: [
+      ...PROTECTED_AGENT_DIRS.map((name) => resolve(agentDir, name)),
+      // Project-local extensions, packages, settings, and prompts all live here.
+      resolve(workspaceDir, PROJECT_CONFIG_DIR),
+    ],
+  };
 }
 
 export function getRequiredWritablePaths(pathResolver: PathResolver): string[] {
@@ -96,7 +100,9 @@ export function loadConfig(workspaceDir: string): { config: SandboxConfig; pathR
   }
 
   const { denyRead, allowRead } = mergeDenyRead(raw.denyRead, raw.allowRead, pathResolver);
-  const protectedPaths = resolveProtectedPaths(workspaceDir);
+  const protectedPaths = getProtectedPiPaths(workspaceDir);
+  const protectedFiles = resolveUnique(protectedPaths.files);
+  const protectedDirs = resolveUnique(protectedPaths.dirs);
 
   return {
     config: {
@@ -105,8 +111,9 @@ export function loadConfig(workspaceDir: string): { config: SandboxConfig; pathR
       allowRead,
       denyRead,
       writable: mergeWritable(raw.writable, pathResolver),
-      denyWithin: mergeDenyWithin(raw.denyWithin, pathResolver, protectedPaths),
-      protectedPaths,
+      denyWithin: mergeDenyWithin(raw.denyWithin, pathResolver, [...protectedFiles, ...protectedDirs]),
+      protectedFiles,
+      protectedDirs,
       network: raw.network ?? true,
       provider: resolveProvider(raw.provider),
     },
@@ -192,22 +199,13 @@ function mergeDenyRead(
   return { denyRead: effectiveDenyRead, allowRead: effectiveAllowRead };
 }
 
-function resolveProtectedPaths(workspaceDir: string): ProtectedPath[] {
-  const seen = new Set<string>();
-  const result: ProtectedPath[] = [];
-  for (const entry of getProtectedPiPaths(workspaceDir)) {
-    const path = resolveRealPath(entry.path);
-    if (!seen.has(path)) {
-      seen.add(path);
-      result.push({ path, kind: entry.kind });
-    }
-  }
-  return result;
+function resolveUnique(paths: string[]): string[] {
+  return [...new Set(paths.map((p) => resolveRealPath(p)))];
 }
 
-function mergeDenyWithin(raw: unknown, resolver: PathResolver, protectedPaths: ProtectedPath[]): string[] {
+function mergeDenyWithin(raw: unknown, resolver: PathResolver, protectedPaths: string[]): string[] {
   const resolved = resolveList(raw, DEFAULT_DENY_WITHIN, resolver);
-  return [...new Set([...resolved, ...protectedPaths.map((p) => p.path)])];
+  return [...new Set([...resolved, ...protectedPaths])];
 }
 
 export function resolveEnabled(raw: unknown): boolean {
