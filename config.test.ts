@@ -105,8 +105,10 @@ describe("loadConfig", () => {
     for (const path of expected) {
       assert.equal(isPathAllowed(resolveRealPath(path), config), false, `expected ${path} to be write-protected`);
     }
-    // The rest of the agent dir (e.g. sessions, skills) stays writable.
-    assert.equal(isPathAllowed(resolveRealPath(join(agentDir, "skills", "x", "SKILL.md")), config), true);
+    // The rest of the agent dir isn't writable by default either; it's mounted read-only.
+    assert.equal(isPathAllowed(resolveRealPath(join(agentDir, "skills", "x", "SKILL.md")), config), false);
+    assert.equal(config.writable.includes(resolveRealPath(agentDir)), false);
+    assert.deepEqual(config.readOnlyMounts, [resolveRealPath(agentDir)]);
   });
 
   it("denies reading Pi API keys and common credential files by default", () => {

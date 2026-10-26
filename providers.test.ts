@@ -288,6 +288,75 @@ describe("buildBwrapSetup", () => {
     }
   });
 
+  it("mounts read-only paths unless a writable root already covers them", () => {
+    const root = mkdtempSync(join(tmpdir(), "pi-sandbox-romount-"));
+    const workspace = join(root, "ws");
+    const agentDir = join(root, "agent");
+    mkdirSync(workspace);
+    mkdirSync(agentDir);
+    try {
+      const base: SandboxConfig = {
+        enabled: true,
+        readOnly: false,
+        denyRead: [],
+        writable: [workspace],
+        denyWithin: [],
+        readOnlyMounts: [agentDir],
+        network: true,
+      };
+      const mounts = (config: SandboxConfig) => {
+        const setup = buildBwrapSetup(workspace, config, workspace);
+        setup.cleanup();
+        return setup.args.flatMap((a, i) => (a.startsWith("--") && setup.args[i + 1] === agentDir && setup.args[i + 2] === agentDir ? [`${a} ${agentDir}`] : []));
+      };
+
+      assert.deepEqual(mounts(base), [`--ro-bind ${agentDir}`]);
+      assert.deepEqual(mounts({ ...base, writable: [workspace, agentDir] }), [`--bind ${agentDir}`]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("pins directories between a writable root and a protected path", () => {
+    const root = mkdtempSync(join(tmpdir(), "pi-sandbox-pin-"));
+    const home = join(root, "home");
+    const agentDir = join(home, ".pi", "agent");
+    const workspace = join(home, "ws");
+    mkdirSync(agentDir, { recursive: true });
+    mkdirSync(join(workspace, ".git", "hooks"), { recursive: true });
+    try {
+      const config: SandboxConfig = {
+        enabled: true,
+        readOnly: false,
+        denyRead: [],
+        writable: [workspace, home],
+        denyWithin: [join(workspace, ".git", "hooks"), join(agentDir, "sandbox.json")],
+        protectedFiles: [join(agentDir, "sandbox.json")],
+        network: true,
+      };
+
+      const setup = buildBwrapSetup(workspace, config, workspace);
+      try {
+        const index = (flag: string, p: string) =>
+          setup.args.findIndex((_a, i) => setup.args[i] === flag && setup.args[i + 1] === p && setup.args[i + 2] === p);
+
+        // Writable roots themselves are already mount points.
+        assert.equal(setup.args.filter((a, i) => a === "--bind" && setup.args[i + 1] === home).length, 1);
+        // .git can't be renamed away to rebuild .git/hooks.
+        assert.ok(index("--bind", join(workspace, ".git")) > index("--bind", workspace));
+        assert.ok(index("--ro-bind", join(workspace, ".git", "hooks")) > index("--bind", join(workspace, ".git")));
+        // ~/.pi is pinned before the agent dir is locked for the missing sandbox.json.
+        const pin = index("--bind", join(home, ".pi"));
+        assert.ok(pin > index("--bind", home));
+        assert.ok(index("--ro-bind", agentDir) > pin);
+      } finally {
+        setup.cleanup();
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("protects missing Pi paths so bash cannot create them", () => {
     const root = mkdtempSync(join(tmpdir(), "pi-sandbox-protect-"));
     const workspace = join(root, "ws");
