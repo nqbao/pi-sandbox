@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildBwrapSetup, buildSandboxExecProfile, buildSandboxedArgv } from "./providers.ts";
-import { getShellConfig } from "@earendil-works/pi-coding-agent";
+import { buildBwrapSetup, buildSandboxExecProfile, buildSandboxedArgv, execSandboxed } from "./providers.ts";
+import { createLocalBashOperations, getShellConfig } from "@earendil-works/pi-coding-agent";
 import type { SandboxConfig } from "./types.ts";
 
 describe("buildSandboxExecProfile", () => {
@@ -444,5 +444,43 @@ describe("buildSandboxedArgv with shellPath", () => {
 
   it("fails like Pi's bash tool when shellPath does not exist", () => {
     assert.throws(() => buildSandboxedArgv([], "echo hi", "/nonexistent/bash"), /Custom shell path not found/);
+  });
+});
+
+// `env` stands in for the sandbox binary: like sandbox-exec it just runs the shell.
+describe("execSandboxed", () => {
+  const run = async (command: string) => {
+    let output = "";
+    let cleanedUp = false;
+    const result = await execSandboxed(
+      createLocalBashOperations(),
+      "env",
+      [],
+      command,
+      process.cwd(),
+      { onData: (data) => (output += data.toString()) },
+      () => (cleanedUp = true),
+    );
+    return { ...result, output, cleanedUp };
+  };
+
+  it("passes commands with quotes and special characters through unchanged", async () => {
+    const result = await run(`printf '%s|' "it's" '$HOME' "a\\"b" \`echo x\`; echo`);
+    assert.equal(result.exitCode, 0);
+    assert.equal(result.output, `it's|$HOME|a"b|x|\n`);
+    assert.equal(result.cleanedUp, true);
+  });
+
+  it("returns when the shell exits, not when background jobs release stdio", async () => {
+    const start = Date.now();
+    const result = await run("echo start; sleep 3 &");
+    assert.ok(Date.now() - start < 2000, `took ${Date.now() - start}ms`);
+    assert.equal(result.output.trim(), "start");
+  });
+
+  it("reports the command's exit code and still cleans up", async () => {
+    const result = await run("exit 7");
+    assert.equal(result.exitCode, 7);
+    assert.equal(result.cleanedUp, true);
   });
 });
