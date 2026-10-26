@@ -42,6 +42,8 @@ The extension reads `sandbox.json` from:
 - `$(pi agent dir)/sandbox.json`
 - `~/.pi/agent/sandbox.json`
 
+The file is read once when the session starts. Edits made later don't apply until you run `/sandbox-reload` or restart Pi, so a change made from inside the sandbox can't loosen the policy between commands.
+
 Supported fields:
 
 - `enabled`: turn the extension on or off globally
@@ -77,7 +79,8 @@ By default, the extension allows writes to:
 
 - `${WORKSPACE}`
 - `${TMP}`
-- Pi agent dir
+
+The Pi agent dir is readable from bash (so skill scripts still run) but not writable. Add `${AGENT_DIR}` to `writable` if a command needs to write there; the protected Pi paths below stay read-only either way.
 
 By default, the extension blocks reads from the following sensitive paths:
 
@@ -118,7 +121,7 @@ These Pi paths are always write-protected, whatever `writable` or `denyWithin` s
 - `${WORKSPACE}/.pi` (project extensions, packages, settings, prompts)
 - in the Pi agent dir: `extensions/`, `npm/`, `git/`, `settings.json`, `trust.json`, `mcp.json`, `models.json`, `auth.json`, `sandbox.json`
 
-On Linux, bubblewrap can only mount existing paths read-only. So before a bash command runs, a missing protected directory is created empty (for example an empty `.pi/` in the workspace). If a protected file is missing, its parent directory is mounted read-only for that command; the parent's existing entries stay writable.
+On Linux, bubblewrap can only mount existing paths read-only. So before a bash command runs, a missing protected directory is created empty (for example an empty `.pi/` in the workspace). If a protected file is missing, its parent directory is mounted read-only for that command; the parent's existing entries stay writable. Directories between a writable root and a protected path (such as `.git`, or `~/.pi` when `${HOME}` is writable) are pinned so they can't be renamed or deleted to rebuild the protected path elsewhere.
 
 Paths are resolved through symlinks before they are checked, including paths that don't exist yet, so a write through a symlinked directory is checked against its real target.
 
@@ -138,7 +141,10 @@ Runtime controls:
 /sandbox-enable
 /sandbox-disable
 /sandbox-reset
+/sandbox-reload
 ```
+
+`/sandbox-reload` re-reads `sandbox.json`, for example after you add a path to `writable` or `allowRead` mid-session.
 
 Startup flags:
 

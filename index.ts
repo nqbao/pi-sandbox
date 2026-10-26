@@ -73,6 +73,14 @@ export default function (pi: ExtensionAPI) {
   let runtimeEnabledOverride: boolean | undefined;
   let runtimeReadOnlyOverride: boolean | undefined;
   const warnedUnavailableProviders = new Set<string>();
+  // sandbox.json is read once and only re-read on /sandbox-reload, so a change to it from
+  // inside the sandbox can't take effect between commands.
+  let loadedConfig: ReturnType<typeof loadConfig>["config"] | undefined;
+
+  function reloadConfig() {
+    loadedConfig = loadConfig(workspaceDir).config;
+    return loadedConfig;
+  }
 
   pi.registerFlag("sandbox", {
     description: "Enable pi-sandbox for this Pi process",
@@ -104,7 +112,7 @@ export default function (pi: ExtensionAPI) {
   }
 
   function getState() {
-    const { config } = loadConfig(workspaceDir);
+    const config = loadedConfig ?? reloadConfig();
     const effectiveConfig = applyReadOnlyOverride(config, runtimeReadOnlyOverride);
     const provider = selectProvider(effectiveConfig.provider);
 
@@ -274,6 +282,7 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("session_start", async () => {
     syncStartupOverrides();
+    reloadConfig();
   });
 
   // ── User bash guard (user-typed !commands) ──────────────────────────────
@@ -341,6 +350,15 @@ export default function (pi: ExtensionAPI) {
     handler: async (_args, ctx) => {
       runtimeEnabledOverride = false;
       ctx.ui.notify("pi-sandbox disabled for this Pi process", "warning");
+    },
+  });
+
+  pi.registerCommand("sandbox-reload", {
+    description: "Re-read sandbox.json and apply it to the current Pi process",
+    handler: async (_args, ctx) => {
+      reloadConfig();
+      const { activeProvider, enabled } = getState();
+      ctx.ui.notify(`pi-sandbox: sandbox.json reloaded (${enabled ? `enabled, ${activeProvider.name}` : "disabled"})`, "info");
     },
   });
 

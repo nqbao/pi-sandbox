@@ -216,8 +216,16 @@ export function buildBwrapSetup(
     bindMounted.add(ws);
   }
 
+  for (const p of config.readOnlyMounts ?? []) {
+    const np = stripTrailingSep(p);
+    if (existsSync(p) && !isUnderBindRoot(np, bindMounted)) {
+      args.push("--ro-bind", p, p);
+      bindMounted.add(np);
+    }
+  }
+
   if (!config.readOnly) {
-    protectMissingPaths(args, config);
+    protectPaths(args, config, bindMounted);
   }
 
   // denyWithin: ro-bind overlay on specific subpaths (order matters — later wins)
@@ -273,7 +281,12 @@ export function buildBwrapSetup(
 // denyWithin pass can mount them read-only. For a missing file, its parent is mounted
 // read-only with the parent's existing children re-bound writable, which blocks creating
 // new entries there without touching the host.
-function protectMissingPaths(args: string[], config: SandboxConfig): void {
+//
+// A read-only mount doesn't stop renaming a directory above it, though: `mv .git .git-old`
+// would let bash rebuild .git/hooks from scratch. So every directory between a writable root
+// and a protected path is bind-mounted onto itself first, since a mount point can't be
+// renamed or removed.
+function protectPaths(args: string[], config: SandboxConfig, bindMounted: Set<string>): void {
   const isMissing = (p: string) => !existsSync(p) && isUnderExistingRoot(p, config.writable);
   const lockParentOf = (config.protectedFiles ?? []).filter(isMissing);
 
@@ -286,10 +299,10 @@ function protectMissingPaths(args: string[], config: SandboxConfig): void {
     }
   }
 
-  const lockedParents = new Set<string>();
+  const lockedParents: string[] = [];
   for (const path of lockParentOf) {
     const parent = dirname(path);
-    if (lockedParents.has(parent)) {
+    if (lockedParents.includes(parent)) {
       continue;
     }
     try {
@@ -298,13 +311,44 @@ function protectMissingPaths(args: string[], config: SandboxConfig): void {
       // parent can't be created on the host; then it can't be created in the sandbox either
       continue;
     }
-    lockedParents.add(parent);
+    lockedParents.push(parent);
+  }
+
+  pinAncestors(args, [...config.denyWithin.filter((p) => existsSync(p)), ...lockedParents], config.writable, bindMounted);
+
+  for (const parent of lockedParents) {
     args.push("--ro-bind", parent, parent);
     for (const child of readdirSync(parent)) {
       const childPath = join(parent, child);
       args.push("--bind", childPath, childPath);
     }
   }
+}
+
+function pinAncestors(args: string[], targets: string[], writable: string[], bindMounted: Set<string>): void {
+  const pins = new Set<string>();
+  for (const target of targets) {
+    for (let dir = dirname(stripTrailingSep(target)); dir !== dirname(dir); dir = dirname(dir)) {
+      if (!isStrictlyUnderExistingRoot(dir, writable)) {
+        break;
+      }
+      if (!bindMounted.has(dir)) {
+        pins.add(dir);
+      }
+    }
+  }
+  // Parents before children, so a later bind doesn't hide an earlier one.
+  const depth = (p: string) => p.split("/").length;
+  for (const dir of [...pins].sort((a, b) => depth(a) - depth(b))) {
+    args.push("--bind", dir, dir);
+  }
+}
+
+function isStrictlyUnderExistingRoot(target: string, roots: string[]): boolean {
+  return roots.some((root) => {
+    const r = stripTrailingSep(root);
+    return target.startsWith(r + "/") && existsSync(r);
+  });
 }
 
 function isUnderExistingRoot(target: string, roots: string[]): boolean {

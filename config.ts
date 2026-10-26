@@ -99,8 +99,12 @@ export function getRequiredWritablePaths(pathResolver: PathResolver): string[] {
   return [
     resolve(pathResolver.resolve("${WORKSPACE}")),
     resolve(pathResolver.resolve("${TMP}")),
-    resolve(getAgentDir()),
   ];
+}
+
+// Visible to sandboxed commands (e.g. skill scripts) but never writable unless sandbox.json says so.
+export function getReadOnlyMounts(): string[] {
+  return [resolve(getAgentDir())];
 }
 
 export function loadConfig(workspaceDir: string): { config: SandboxConfig; pathResolver: PathResolver } {
@@ -135,6 +139,7 @@ export function loadConfig(workspaceDir: string): { config: SandboxConfig; pathR
       denyWithin: mergeDenyWithin(raw.denyWithin, pathResolver, [...protectedFiles, ...protectedDirs]),
       protectedFiles,
       protectedDirs,
+      readOnlyMounts: resolveUnique(getReadOnlyMounts()),
       network: raw.network ?? true,
       provider: resolveProvider(raw.provider),
     },

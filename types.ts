@@ -17,6 +17,8 @@ export interface SandboxConfig {
   protectedFiles?: string[];
   /** Pi code/config directories that are always write-protected (also included in denyWithin). */
   protectedDirs?: string[];
+  /** Paths mounted read-only in the Linux sandbox (the Pi agent dir). Writable roots take precedence. */
+  readOnlyMounts?: string[];
   /** Allow outbound network access. Default: true. */
   network: boolean;
   /** Force a specific provider: "auto" | "sandbox-exec" | "bubblewrap" | "none". Default: "auto". */
