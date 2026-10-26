@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildBwrapSetup, buildSandboxExecProfile } from "./providers.ts";
@@ -278,6 +278,74 @@ describe("buildBwrapSetup", () => {
     } finally {
       rmSync(workspace, { recursive: true, force: true });
       rmSync(writableDir, { recursive: true, force: true });
+    }
+  });
+
+  it("protects missing Pi paths so bash cannot create them", () => {
+    const root = mkdtempSync(join(tmpdir(), "pi-sandbox-protect-"));
+    const workspace = join(root, "ws");
+    const agentDir = join(root, "agent");
+    mkdirSync(workspace);
+    mkdirSync(join(agentDir, "sessions"), { recursive: true });
+    try {
+      const config: SandboxConfig = {
+        enabled: true,
+        readOnly: false,
+        denyRead: [],
+        writable: [workspace, agentDir],
+        denyWithin: [join(workspace, ".pi"), join(agentDir, "extensions"), join(agentDir, "settings.json")],
+        protectedPaths: [
+          { path: join(workspace, ".pi"), kind: "dir" },
+          { path: join(agentDir, "extensions"), kind: "dir" },
+          { path: join(agentDir, "settings.json"), kind: "file" },
+        ],
+        network: true,
+      };
+
+      const setup = buildBwrapSetup(workspace, config, workspace);
+      try {
+        const roBound = (p: string) =>
+          setup.args.findIndex((_a, i) => setup.args[i] === "--ro-bind" && setup.args[i + 1] === p && setup.args[i + 2] === p);
+        const bound = (p: string) =>
+          setup.args.findIndex((_a, i) => setup.args[i] === "--bind" && setup.args[i + 2] === p);
+
+        // Missing directories are created and mounted read-only.
+        assert.equal(statSync(join(workspace, ".pi")).isDirectory(), true);
+        assert.notEqual(roBound(join(workspace, ".pi")), -1);
+        assert.notEqual(roBound(join(agentDir, "extensions")), -1);
+
+        // A missing file locks its parent, re-binding existing children writable afterwards.
+        assert.equal(existsSync(join(agentDir, "settings.json")), false);
+        const lockIndex = roBound(agentDir);
+        assert.ok(lockIndex > bound(agentDir), "parent lock must come after the writable bind");
+        assert.ok(bound(join(agentDir, "sessions")) > lockIndex, "existing children stay writable");
+        // The created extensions dir is a child too, but its ro-bind must win.
+        assert.ok(roBound(join(agentDir, "extensions")) > bound(join(agentDir, "extensions")));
+      } finally {
+        setup.cleanup();
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not create protected paths in read-only mode", () => {
+    const root = mkdtempSync(join(tmpdir(), "pi-sandbox-protect-ro-"));
+    try {
+      const config: SandboxConfig = {
+        enabled: true,
+        readOnly: true,
+        denyRead: [],
+        writable: [root],
+        denyWithin: [join(root, ".pi")],
+        protectedPaths: [{ path: join(root, ".pi"), kind: "dir" }],
+        network: true,
+      };
+      const setup = buildBwrapSetup(root, config, root);
+      setup.cleanup();
+      assert.equal(existsSync(join(root, ".pi")), false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
   });
 });

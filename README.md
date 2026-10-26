@@ -99,6 +99,15 @@ And blocks writes to:
 
 - `${WORKSPACE}/.git/hooks`
 
+These Pi paths are always write-protected, whatever `writable` or `denyWithin` say, because Pi loads code, credentials, or trust decisions from them on the next start:
+
+- `${WORKSPACE}/.pi` (project extensions, packages, settings, prompts)
+- in the Pi agent dir: `extensions/`, `npm/`, `git/`, `settings.json`, `trust.json`, `mcp.json`, `models.json`, `auth.json`, `sandbox.json`
+
+On Linux, bubblewrap can only mount existing paths read-only. So before a bash command runs, a missing protected directory is created empty (for example an empty `.pi/` in the workspace). If a protected file is missing, its parent directory is mounted read-only for that command; the parent's existing entries stay writable.
+
+Paths are resolved through symlinks before they are checked, including paths that don't exist yet, so a write through a symlinked directory is checked against its real target.
+
 ## Status Command
 
 The extension registers a Pi command:

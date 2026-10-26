@@ -13,13 +13,21 @@ export interface SandboxConfig {
   writable: string[];
   /** Paths explicitly denied for writes, even inside writable directories (e.g. .git/hooks). */
   denyWithin: string[];
+  /** Pi config/code paths that are always write-protected (also included in denyWithin). */
+  protectedPaths?: ProtectedPath[];
   /** Allow outbound network access. Default: true. */
   network: boolean;
   /** Force a specific provider: "auto" | "sandbox-exec" | "bubblewrap" | "none". Default: "auto". */
   provider?: SandboxProviderType;
 }
 
-export type SandboxProviderType = "auto" | "sandbox-exec" | "bubblewrap" | "none";
+export interface ProtectedPath {
+  path: string;
+  /** Whether the path is a file or a directory when it exists. Needed to protect it before it exists. */
+  kind: "file" | "dir";
+}
+
+export type SandboxProviderType ="auto" | "sandbox-exec" | "bubblewrap" | "none";
 
 export interface SandboxProvider {
   /** Human-readable name for logging. */

@@ -1,7 +1,9 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { loadConfig, getProtectedConfigPaths, getRequiredWritablePaths, resolveEnabled, resolveReadOnly, computeEffectiveDenyRead } from "./config.ts";
+import { loadConfig, getProtectedConfigPaths, getProtectedPiPaths, getRequiredWritablePaths, resolveEnabled, resolveReadOnly, computeEffectiveDenyRead } from "./config.ts";
 import { isPathAllowed, resolveRealPath } from "./guard.ts";
+import { join } from "node:path";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
 describe("resolveEnabled", () => {
   it("defaults to enabled", () => {
@@ -63,6 +65,37 @@ describe("loadConfig", () => {
       const realPath = resolveRealPath(path);
       assert.equal(config.denyWithin.includes(realPath), true);
       assert.equal(isPathAllowed(realPath, config), false);
+    }
+  });
+
+  it("write-protects Pi extension, package, settings, and trust paths", () => {
+    const { config } = loadConfig("/workspace");
+    const agentDir = getAgentDir();
+    const expected = [
+      join(agentDir, "extensions", "evil.ts"),
+      join(agentDir, "npm", "node_modules", "pkg", "index.js"),
+      join(agentDir, "git", "repo", "index.ts"),
+      join(agentDir, "settings.json"),
+      join(agentDir, "trust.json"),
+      join(agentDir, "mcp.json"),
+      join(agentDir, "models.json"),
+      join(agentDir, "auth.json"),
+      "/workspace/.pi/extensions/evil.ts",
+      "/workspace/.pi/settings.json",
+    ];
+    for (const path of expected) {
+      assert.equal(isPathAllowed(resolveRealPath(path), config), false, `expected ${path} to be write-protected`);
+    }
+    // The rest of the agent dir (e.g. sessions, skills) stays writable.
+    assert.equal(isPathAllowed(resolveRealPath(join(agentDir, "skills", "x", "SKILL.md")), config), true);
+  });
+
+  it("exposes protected paths with their kind", () => {
+    const { config } = loadConfig("/workspace");
+    for (const entry of getProtectedPiPaths("/workspace")) {
+      const match = config.protectedPaths?.find((p) => p.path === resolveRealPath(entry.path));
+      assert.ok(match, `expected ${entry.path} in protectedPaths`);
+      assert.equal(match.kind, entry.kind);
     }
   });
 

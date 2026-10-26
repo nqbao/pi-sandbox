@@ -1,17 +1,40 @@
-import { realpathSync } from "node:fs";
+import { lstatSync, readlinkSync, realpathSync } from "node:fs";
 import { resolve, dirname, basename, join } from "node:path";
 import { homedir } from "node:os";
 import type { SandboxConfig } from "./types.ts";
 
-export function resolveRealPath(targetPath: string): string {
-  try {
-    return realpathSync(targetPath);
-  } catch {
+const MAX_SYMLINK_HOPS = 40;
+
+/**
+ * Canonicalizes a path that may not exist yet. Walks up to the nearest existing
+ * ancestor and resolves symlinks there, so a missing path under a symlinked
+ * directory (write tools create parents recursively) resolves to its real target.
+ * Dangling symlinks are followed too, since writing through one creates its target.
+ */
+export function resolveRealPath(targetPath: string, hops = 0): string {
+  const absolute = resolve(targetPath);
+  const tail: string[] = [];
+  let probe = absolute;
+  while (true) {
     try {
-      const parent = realpathSync(dirname(targetPath));
-      return join(parent, basename(targetPath));
+      return join(realpathSync(probe), ...tail);
     } catch {
-      return resolve(targetPath);
+      if (hops < MAX_SYMLINK_HOPS) {
+        try {
+          if (lstatSync(probe).isSymbolicLink()) {
+            const linkTarget = resolve(dirname(probe), readlinkSync(probe));
+            return resolveRealPath(join(linkTarget, ...tail), hops + 1);
+          }
+        } catch {
+          // not a symlink or unreadable — keep walking up
+        }
+      }
+      const parent = dirname(probe);
+      if (parent === probe) {
+        return absolute;
+      }
+      tail.unshift(basename(probe));
+      probe = parent;
     }
   }
 }
