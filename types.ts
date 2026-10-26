@@ -35,8 +35,9 @@ export interface SandboxProvider {
   /**
    * Wraps a BashOperations instance with sandbox enforcement.
    * Returns a new BashOperations whose `exec` passes commands through the OS sandbox.
+   * `shellPath` is Pi's shellPath setting, if set; the sandboxed command runs in that shell.
    */
-  wrap(inner: BashOperations, cwd: string, config: SandboxConfig): BashOperations;
+  wrap(inner: BashOperations, cwd: string, config: SandboxConfig, shellPath?: string): BashOperations;
 }
 
 export interface PathResolver {

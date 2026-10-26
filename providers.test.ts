@@ -434,3 +434,15 @@ describe("buildSandboxedArgv", () => {
     }
   });
 });
+
+describe("buildSandboxedArgv with shellPath", () => {
+  it("uses Pi's shellPath setting when given", () => {
+    const shellPath = process.execPath; // any existing file
+    const argv = buildSandboxedArgv([], "echo hi", shellPath);
+    assert.deepEqual(argv, ["--", shellPath, "-c", "echo hi"]);
+  });
+
+  it("fails like Pi's bash tool when shellPath does not exist", () => {
+    assert.throws(() => buildSandboxedArgv([], "echo hi", "/nonexistent/bash"), /Custom shell path not found/);
+  });
+});

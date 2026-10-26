@@ -27,7 +27,7 @@ class SandboxExecProvider implements SandboxProvider {
     return platform() === "darwin" && findBinary("sandbox-exec");
   }
 
-  wrap(inner: BashOperations, _cwd: string, config: SandboxConfig): BashOperations {
+  wrap(inner: BashOperations, _cwd: string, config: SandboxConfig, shellPath?: string): BashOperations {
     const key = JSON.stringify([config.readOnly, config.network, config.writable, config.denyRead, config.denyWithin, config.allowRead]);
     let profile = this._profileCache.get(key);
     if (!profile) {
@@ -38,7 +38,7 @@ class SandboxExecProvider implements SandboxProvider {
     return {
       ...inner,
       exec(command, cwd, options) {
-        return spawnSandboxedCommand("sandbox-exec", ["-p", profile], command, cwd, options);
+        return spawnSandboxedCommand("sandbox-exec", ["-p", profile], command, cwd, options, undefined, shellPath);
       },
     };
   }
@@ -157,12 +157,12 @@ class BubblewrapProvider implements SandboxProvider {
     return platform() === "linux" && findBinary("bwrap");
   }
 
-  wrap(inner: BashOperations, workspaceDir: string, config: SandboxConfig): BashOperations {
+  wrap(inner: BashOperations, workspaceDir: string, config: SandboxConfig, shellPath?: string): BashOperations {
     return {
       ...inner,
       exec(command, cwd, options) {
         const setup = buildBwrapSetup(cwd, config, workspaceDir);
-        return spawnSandboxedCommand("bwrap", setup.args, command, cwd, options, setup.cleanup);
+        return spawnSandboxedCommand("bwrap", setup.args, command, cwd, options, setup.cleanup, shellPath);
       },
     };
   }
@@ -421,10 +421,10 @@ class NoopProvider implements SandboxProvider {
   }
 }
 
-// Use the same shell as Pi's own bash tool (/bin/bash, then bash on PATH, then sh)
-// rather than /bin/sh, which is dash on Debian/Ubuntu and rejects bash syntax.
-export function buildSandboxedArgv(sandboxArgs: string[], command: string): string[] {
-  const { shell, args: shellArgs } = getShellConfig();
+// Use the same shell as Pi's own bash tool (the shellPath setting, else /bin/bash, then
+// bash on PATH, then sh) rather than /bin/sh, which is dash on Debian/Ubuntu and rejects bash syntax.
+export function buildSandboxedArgv(sandboxArgs: string[], command: string, shellPath?: string): string[] {
+  const { shell, args: shellArgs } = getShellConfig(shellPath);
   return [...sandboxArgs, "--", shell, ...shellArgs, command];
 }
 
@@ -440,6 +440,7 @@ function spawnSandboxedCommand(
     env?: NodeJS.ProcessEnv;
   },
   cleanup?: () => void,
+  shellPath?: string,
 ): Promise<{ exitCode: number | null }> {
   return new Promise((resolve, reject) => {
     let settled = false;
@@ -452,7 +453,7 @@ function spawnSandboxedCommand(
       cleanup?.();
     };
 
-    const child = spawn(binary, buildSandboxedArgv(args, command), {
+    const child = spawn(binary, buildSandboxedArgv(args, command, shellPath), {
       cwd,
       detached: process.platform !== "win32",
       env: options.env ?? process.env,
