@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { applyReadOnlyOverride, assertSandboxProviderAvailable, resolveStartupOverrides } from "./index.ts";
+import { applyReadOnlyOverride, assertSandboxProviderAvailable, describeBackgroundProcesses, readShellPath, resolveStartupOverrides } from "./index.ts";
 import type { SandboxConfig } from "./types.ts";
 
 describe("applyReadOnlyOverride", () => {
@@ -60,5 +60,44 @@ describe("resolveStartupOverrides", () => {
         "[pi-sandbox] --sandbox-readonly is ignored when --no-sandbox is set.",
       ],
     });
+  });
+});
+
+describe("describeBackgroundProcesses", () => {
+  it("reflects allowBackgroundProcesses on Linux", () => {
+    assert.equal(describeBackgroundProcesses("bubblewrap", false), "killed when the command exits");
+    assert.equal(describeBackgroundProcesses("bubblewrap", true), "kept running (no PID namespace)");
+  });
+
+  it("says background jobs keep running on macOS whatever the setting", () => {
+    for (const allow of [false, true]) {
+      assert.match(describeBackgroundProcesses("sandbox-exec", allow), /^kept running .*only applies on Linux/);
+    }
+  });
+});
+
+describe("readShellPath", () => {
+  const settings = (shellPath?: string) => () => ({ shellPath }) as ReturnType<Parameters<typeof readShellPath>[0]["getSettings"]>;
+
+  it("returns Pi's shellPath setting", () => {
+    const warnings: string[] = [];
+    assert.equal(readShellPath({ getSettings: settings("/opt/bash") }, (m) => warnings.push(m)), "/opt/bash");
+    assert.deepEqual(warnings, []);
+  });
+
+  it("warns when this Pi version has no getSettings", () => {
+    const warnings: string[] = [];
+    assert.equal(readShellPath({} as Parameters<typeof readShellPath>[0], (m) => warnings.push(m)), undefined);
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0], /shellPath setting is ignored/);
+  });
+
+  it("returns undefined without warning before the runtime is initialized", () => {
+    const warnings: string[] = [];
+    const notInitialized = () => {
+      throw new Error("Extension runtime not initialized");
+    };
+    assert.equal(readShellPath({ getSettings: notInitialized }, (m) => warnings.push(m)), undefined);
+    assert.deepEqual(warnings, []);
   });
 });

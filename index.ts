@@ -35,6 +35,30 @@ export function assertSandboxProviderAvailable(enabled: boolean, providerName: s
   }
 }
 
+export function describeBackgroundProcesses(providerName: string, allowBackgroundProcesses: boolean | undefined): string {
+  if (providerName === "bubblewrap") {
+    return allowBackgroundProcesses ? "kept running (no PID namespace)" : "killed when the command exits";
+  }
+  if (providerName === "sandbox-exec") {
+    return "kept running (allowBackgroundProcesses only applies on Linux)";
+  }
+  return "kept running";
+}
+
+// pi.getSettings() was added in Pi 0.99.0; on older Pi, shellPath can't be read.
+export function readShellPath(pi: Pick<ExtensionAPI, "getSettings">, warn: (message: string) => void): string | undefined {
+  if (typeof pi.getSettings !== "function") {
+    warn("[pi-sandbox] This Pi version has no pi.getSettings() (added in 0.99.0), so the shellPath setting is ignored and bash commands use the default shell");
+    return undefined;
+  }
+  try {
+    return pi.getSettings().shellPath;
+  } catch {
+    // Not available until the extension runtime is initialized.
+    return undefined;
+  }
+}
+
 export function resolveStartupOverrides(
   forceSandbox: boolean,
   forceNoSandbox: boolean,
@@ -143,13 +167,14 @@ export default function (pi: ExtensionAPI) {
   // ── Bash tool override ──────────────────────────────────────────────────
 
   // Settings aren't available while the extension loads, so read shellPath per command.
-  const getShellPath = (): string | undefined => {
-    try {
-      return pi.getSettings().shellPath;
-    } catch {
-      return undefined;
+  let warnedNoSettings = false;
+  const warnOnce = (message: string) => {
+    if (!warnedNoSettings) {
+      warnedNoSettings = true;
+      console.warn(message);
     }
   };
+  const getShellPath = () => readShellPath(pi, warnOnce);
   type ExecOptions = Parameters<ReturnType<typeof createLocalBashOperations>["exec"]>[2];
   const dynamicOps = {
     exec(command: string, cwd: string, options: ExecOptions) {
@@ -317,7 +342,7 @@ export default function (pi: ExtensionAPI) {
         `Provider:     ${activeProvider.name}${enabled && activeProvider.name === "none" ? " (unavailable)" : ""}`,
         `Read-only:    ${config.readOnly ? "yes" : "no"}`,
         `Network:      ${config.network ? "allowed" : "blocked"}`,
-        `Background:   ${config.allowBackgroundProcesses ? "allowed (Linux: no PID namespace)" : "killed when command exits (Linux)"}`,
+        `Background:   ${describeBackgroundProcesses(activeProvider.name, config.allowBackgroundProcesses)}`,
         `Writable:`,
         ...(config.writable.length > 0 ? config.writable.map((p) => `  - ${p}`) : ["  - none"]),
       ];
