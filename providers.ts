@@ -1,8 +1,7 @@
 import { chmodSync, existsSync, mkdtempSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { spawn } from "node:child_process";
 import { resolve as pathResolve, dirname, join } from "node:path";
 import { platform, tmpdir } from "node:os";
-import type { BashOperations } from "@earendil-works/pi-coding-agent";
+import { getShellConfig, type BashOperations } from "@earendil-works/pi-coding-agent";
 import type { SandboxProvider, SandboxConfig, SandboxProviderType } from "./types.ts";
 import { stripTrailingSep } from "./guard.ts";
 
@@ -27,7 +26,7 @@ class SandboxExecProvider implements SandboxProvider {
     return platform() === "darwin" && findBinary("sandbox-exec");
   }
 
-  wrap(inner: BashOperations, _cwd: string, config: SandboxConfig): BashOperations {
+  wrap(inner: BashOperations, _cwd: string, config: SandboxConfig, shellPath?: string): BashOperations {
     const key = JSON.stringify([config.readOnly, config.network, config.writable, config.denyRead, config.denyWithin, config.allowRead]);
     let profile = this._profileCache.get(key);
     if (!profile) {
@@ -38,7 +37,7 @@ class SandboxExecProvider implements SandboxProvider {
     return {
       ...inner,
       exec(command, cwd, options) {
-        return spawnSandboxedCommand("sandbox-exec", ["-p", profile], command, cwd, options);
+        return execSandboxed(inner, "sandbox-exec", ["-p", profile], command, cwd, options, undefined, shellPath);
       },
     };
   }
@@ -157,12 +156,12 @@ class BubblewrapProvider implements SandboxProvider {
     return platform() === "linux" && findBinary("bwrap");
   }
 
-  wrap(inner: BashOperations, workspaceDir: string, config: SandboxConfig): BashOperations {
+  wrap(inner: BashOperations, workspaceDir: string, config: SandboxConfig, shellPath?: string): BashOperations {
     return {
       ...inner,
       exec(command, cwd, options) {
         const setup = buildBwrapSetup(cwd, config, workspaceDir);
-        return spawnSandboxedCommand("bwrap", setup.args, command, cwd, options, setup.cleanup);
+        return execSandboxed(inner, "bwrap", setup.args, command, cwd, options, setup.cleanup, shellPath);
       },
     };
   }
@@ -176,11 +175,20 @@ export function buildBwrapSetup(
   const args: string[] = [];
   const cleanupDirs: string[] = [];
 
-  args.push("--unshare-all");
-  args.push("--die-with-parent");
-  if (config.network) {
-    args.push("--share-net");
+  if (config.allowBackgroundProcesses) {
+    // --unshare-all minus --unshare-pid: without a PID namespace of its own, background jobs
+    // aren't killed when the command's shell exits.
+    args.push("--unshare-user-try", "--unshare-ipc", "--unshare-uts", "--unshare-cgroup-try");
+    if (!config.network) {
+      args.push("--unshare-net");
+    }
+  } else {
+    args.push("--unshare-all");
+    if (config.network) {
+      args.push("--share-net");
+    }
   }
+  args.push("--die-with-parent");
 
   args.push("--dev", "/dev");
   args.push("--proc", "/proc");
@@ -421,99 +429,41 @@ class NoopProvider implements SandboxProvider {
   }
 }
 
-function spawnSandboxedCommand(
+// Use the same shell as Pi's own bash tool (the shellPath setting, else /bin/bash, then
+// bash on PATH, then sh) rather than /bin/sh, which is dash on Debian/Ubuntu and rejects bash syntax.
+export function buildSandboxedArgv(sandboxArgs: string[], command: string, shellPath?: string): string[] {
+  const { shell, args: shellArgs } = getShellConfig(shellPath);
+  return [...sandboxArgs, "--", shell, ...shellArgs, command];
+}
+
+function shellQuote(arg: string): string {
+  return `'${arg.replace(/'/g, `'\\''`)}'`;
+}
+
+// The shell command that replaces itself with the sandbox binary running the user's command.
+export function buildSandboxedCommand(binary: string, sandboxArgs: string[], command: string, shellPath?: string): string {
+  return ["exec", ...[binary, ...buildSandboxedArgv(sandboxArgs, command, shellPath)].map(shellQuote)].join(" ");
+}
+
+// Run through Pi's own exec rather than spawning directly, so the sandboxed command gets
+// Pi's process handling: it returns when the process exits instead of waiting for
+// background jobs to close stdio, kills the whole process tree on abort or timeout,
+// and is tracked so Pi kills it on shutdown.
+export async function execSandboxed(
+  inner: BashOperations,
   binary: string,
   args: string[],
   command: string,
   cwd: string,
-  options: {
-    onData: (data: Buffer) => void;
-    signal?: AbortSignal;
-    timeout?: number;
-    env?: NodeJS.ProcessEnv;
-  },
+  options: Parameters<BashOperations["exec"]>[2],
   cleanup?: () => void,
+  shellPath?: string,
 ): Promise<{ exitCode: number | null }> {
-  return new Promise((resolve, reject) => {
-    let settled = false;
-    let cleanedUp = false;
-    const runCleanup = () => {
-      if (cleanedUp) {
-        return;
-      }
-      cleanedUp = true;
-      cleanup?.();
-    };
-
-    const child = spawn(binary, [...args, "--", "/bin/sh", "-c", command], {
-      cwd,
-      detached: process.platform !== "win32",
-      env: options.env ?? process.env,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-
-    let timedOut = false;
-    let timeoutHandle: NodeJS.Timeout | undefined;
-
-    const killChild = () => {
-      if (!child.killed) {
-        try {
-          if (process.platform !== "win32" && child.pid) {
-            process.kill(-child.pid, "SIGKILL");
-          } else {
-            child.kill("SIGKILL");
-          }
-        } catch {
-          child.kill("SIGKILL");
-        }
-      }
-    };
-
-    if (options.timeout !== undefined && options.timeout > 0) {
-      timeoutHandle = setTimeout(() => {
-        timedOut = true;
-        killChild();
-      }, options.timeout * 1000);
-    }
-
-    const onAbort = () => {
-      if (settled) return;
-      killChild();
-    };
-
-    if (options.signal) {
-      if (options.signal.aborted) {
-        onAbort();
-      } else {
-        options.signal.addEventListener("abort", onAbort, { once: true });
-      }
-    }
-
-    child.stdout?.on("data", options.onData);
-    child.stderr?.on("data", options.onData);
-    child.on("error", (err) => {
-      settled = true;
-      if (timeoutHandle) clearTimeout(timeoutHandle);
-      if (options.signal) options.signal.removeEventListener("abort", onAbort);
-      runCleanup();
-      reject(err);
-    });
-    child.on("close", (code) => {
-      settled = true;
-      if (timeoutHandle) clearTimeout(timeoutHandle);
-      if (options.signal) options.signal.removeEventListener("abort", onAbort);
-      runCleanup();
-      if (options.signal?.aborted) {
-        reject(new Error("aborted"));
-        return;
-      }
-      if (timedOut) {
-        reject(new Error(`timeout:${options.timeout}`));
-        return;
-      }
-      resolve({ exitCode: code });
-    });
-  });
+  try {
+    return await inner.exec(buildSandboxedCommand(binary, args, command, shellPath), cwd, options);
+  } finally {
+    cleanup?.();
+  }
 }
 
 // ─── Provider factory ──────────────────────────────────────────────────────

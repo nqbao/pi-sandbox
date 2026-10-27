@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildBwrapSetup, buildSandboxExecProfile } from "./providers.ts";
+import { buildBwrapSetup, buildSandboxExecProfile, buildSandboxedArgv, execSandboxed } from "./providers.ts";
+import { createLocalBashOperations, getShellConfig } from "@earendil-works/pi-coding-agent";
 import type { SandboxConfig } from "./types.ts";
 
 describe("buildSandboxExecProfile", () => {
@@ -420,5 +421,98 @@ describe("buildBwrapSetup", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe("buildSandboxedArgv", () => {
+  it("runs the command with the same shell as Pi's bash tool, not /bin/sh", () => {
+    const { shell, args } = getShellConfig();
+    const argv = buildSandboxedArgv(["--ro-bind", "/usr", "/usr"], "[[ 1 == 1 ]] && echo ok");
+    assert.deepEqual(argv, ["--ro-bind", "/usr", "/usr", "--", shell, ...args, "[[ 1 == 1 ]] && echo ok"]);
+    if (existsSync("/bin/bash")) {
+      assert.equal(shell, "/bin/bash");
+    }
+  });
+});
+
+describe("buildSandboxedArgv with shellPath", () => {
+  it("uses Pi's shellPath setting when given", () => {
+    const shellPath = process.execPath; // any existing file
+    const argv = buildSandboxedArgv([], "echo hi", shellPath);
+    assert.deepEqual(argv, ["--", shellPath, "-c", "echo hi"]);
+  });
+
+  it("fails like Pi's bash tool when shellPath does not exist", () => {
+    assert.throws(() => buildSandboxedArgv([], "echo hi", "/nonexistent/bash"), /Custom shell path not found/);
+  });
+});
+
+// `env` stands in for the sandbox binary: like sandbox-exec it just runs the shell.
+describe("execSandboxed", () => {
+  const run = async (command: string) => {
+    let output = "";
+    let cleanedUp = false;
+    const result = await execSandboxed(
+      createLocalBashOperations(),
+      "env",
+      [],
+      command,
+      process.cwd(),
+      { onData: (data) => (output += data.toString()) },
+      () => (cleanedUp = true),
+    );
+    return { ...result, output, cleanedUp };
+  };
+
+  it("passes commands with quotes and special characters through unchanged", async () => {
+    const result = await run(`printf '%s|' "it's" '$HOME' "a\\"b" \`echo x\`; echo`);
+    assert.equal(result.exitCode, 0);
+    assert.equal(result.output, `it's|$HOME|a"b|x|\n`);
+    assert.equal(result.cleanedUp, true);
+  });
+
+  it("returns when the shell exits, not when background jobs release stdio", async () => {
+    const start = Date.now();
+    const result = await run("echo start; sleep 3 &");
+    assert.ok(Date.now() - start < 2000, `took ${Date.now() - start}ms`);
+    assert.equal(result.output.trim(), "start");
+  });
+
+  it("reports the command's exit code and still cleans up", async () => {
+    const result = await run("exit 7");
+    assert.equal(result.exitCode, 7);
+    assert.equal(result.cleanedUp, true);
+  });
+});
+
+describe("buildBwrapSetup namespaces", () => {
+  const flagsFor = (overrides: Partial<SandboxConfig>) => {
+    const workspace = mkdtempSync(join(tmpdir(), "pi-sandbox-workspace-"));
+    try {
+      const setup = buildBwrapSetup(workspace, {
+        enabled: true,
+        readOnly: false,
+        denyRead: [],
+        writable: [workspace],
+        denyWithin: [],
+        network: true,
+        ...overrides,
+      }, workspace);
+      setup.cleanup();
+      return setup.args.filter((arg) => arg.startsWith("--unshare") || arg === "--share-net");
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  };
+
+  it("gives each command its own PID namespace by default", () => {
+    assert.deepEqual(flagsFor({}), ["--unshare-all", "--share-net"]);
+    assert.deepEqual(flagsFor({ network: false }), ["--unshare-all"]);
+  });
+
+  it("keeps every namespace but PID when allowBackgroundProcesses is set", () => {
+    const shared = ["--unshare-user-try", "--unshare-ipc", "--unshare-uts", "--unshare-cgroup-try"];
+    assert.deepEqual(flagsFor({ allowBackgroundProcesses: true }), shared);
+    assert.deepEqual(flagsFor({ allowBackgroundProcesses: true, network: false }), [...shared, "--unshare-net"]);
   });
 });

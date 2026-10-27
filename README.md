@@ -52,6 +52,7 @@ Supported fields:
 - `writable`: directories Pi is allowed to modify
 - `denyWithin`: subpaths that stay blocked even if they are inside a writable directory
 - `network`: whether outbound network access is allowed
+- `allowBackgroundProcesses`: Linux only, default `false` (see [Background processes](#background-processes-linux))
 - `provider`: `auto`, `sandbox-exec`, `bubblewrap`, or `none`
 
 Example:
@@ -124,6 +125,17 @@ These Pi paths are always write-protected, whatever `writable` or `denyWithin` s
 On Linux, bubblewrap can only mount existing paths read-only. So before a bash command runs, a missing protected directory is created empty (for example an empty `.pi/` in the workspace). If a protected file is missing, its parent directory is mounted read-only for that command; the parent's existing entries stay writable. Directories between a writable root and a protected path (such as `.git`, or `~/.pi` when `${HOME}` is writable) are pinned so they can't be renamed or deleted to rebuild the protected path elsewhere.
 
 Paths are resolved through symlinks before they are checked, including paths that don't exist yet, so a write through a symlinked directory is checked against its real target.
+
+### Background processes (Linux)
+
+On Linux each bash command gets its own PID namespace, so it can't see or signal other processes on your machine. The catch is that background jobs (`npm run dev &`, `nohup ... &`) are killed as soon as the command returns. On macOS they keep running.
+
+Set `"allowBackgroundProcesses": true` to keep them running. Background jobs keep every other sandbox restriction (filesystem, network), but any sandboxed command can then:
+
+- list every process on the machine, with its command line
+- send signals to your other processes, including Pi itself
+
+They also aren't tied to Pi, so they keep running after Pi exits until you stop them.
 
 ## Status Command
 

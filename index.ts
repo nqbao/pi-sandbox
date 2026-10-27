@@ -142,15 +142,25 @@ export default function (pi: ExtensionAPI) {
 
   // ── Bash tool override ──────────────────────────────────────────────────
 
-  const localOps = createLocalBashOperations();
+  // Settings aren't available while the extension loads, so read shellPath per command.
+  const getShellPath = (): string | undefined => {
+    try {
+      return pi.getSettings().shellPath;
+    } catch {
+      return undefined;
+    }
+  };
+  type ExecOptions = Parameters<ReturnType<typeof createLocalBashOperations>["exec"]>[2];
   const dynamicOps = {
-    exec(command: string, cwd: string, options: Parameters<typeof localOps.exec>[2]) {
+    exec(command: string, cwd: string, options: ExecOptions) {
       const state = getState();
+      const shellPath = getShellPath();
+      const localOps = createLocalBashOperations({ shellPath });
       if (!state.enabled) {
         return localOps.exec(command, cwd, options);
       }
       assertSandboxProviderAvailable(state.enabled, state.activeProvider.name);
-      return state.activeProvider.wrap(localOps, workspaceDir, state.config).exec(command, cwd, options);
+      return state.activeProvider.wrap(localOps, workspaceDir, state.config, shellPath).exec(command, cwd, options);
     },
   };
 
@@ -307,6 +317,7 @@ export default function (pi: ExtensionAPI) {
         `Provider:     ${activeProvider.name}${enabled && activeProvider.name === "none" ? " (unavailable)" : ""}`,
         `Read-only:    ${config.readOnly ? "yes" : "no"}`,
         `Network:      ${config.network ? "allowed" : "blocked"}`,
+        `Background:   ${config.allowBackgroundProcesses ? "allowed (Linux: no PID namespace)" : "killed when command exits (Linux)"}`,
         `Writable:`,
         ...(config.writable.length > 0 ? config.writable.map((p) => `  - ${p}`) : ["  - none"]),
       ];

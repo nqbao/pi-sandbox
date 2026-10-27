@@ -21,6 +21,12 @@ export interface SandboxConfig {
   readOnlyMounts?: string[];
   /** Allow outbound network access. Default: true. */
   network: boolean;
+  /**
+   * Linux only: let background jobs (`cmd &`) keep running after the command returns, by not
+   * giving each command its own PID namespace. Sandboxed commands can then see and signal
+   * host processes. Default: false.
+   */
+  allowBackgroundProcesses?: boolean;
   /** Force a specific provider: "auto" | "sandbox-exec" | "bubblewrap" | "none". Default: "auto". */
   provider?: SandboxProviderType;
 }
@@ -35,8 +41,9 @@ export interface SandboxProvider {
   /**
    * Wraps a BashOperations instance with sandbox enforcement.
    * Returns a new BashOperations whose `exec` passes commands through the OS sandbox.
+   * `shellPath` is Pi's shellPath setting, if set; the sandboxed command runs in that shell.
    */
-  wrap(inner: BashOperations, cwd: string, config: SandboxConfig): BashOperations;
+  wrap(inner: BashOperations, cwd: string, config: SandboxConfig, shellPath?: string): BashOperations;
 }
 
 export interface PathResolver {

@@ -141,6 +141,7 @@ export function loadConfig(workspaceDir: string): { config: SandboxConfig; pathR
       protectedDirs,
       readOnlyMounts: resolveUnique(getReadOnlyMounts()),
       network: raw.network ?? true,
+      allowBackgroundProcesses: raw.allowBackgroundProcesses === true,
       provider: resolveProvider(raw.provider),
     },
     pathResolver,
