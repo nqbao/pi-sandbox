@@ -7,7 +7,7 @@ import {
 import { readFileSync } from "node:fs";
 import { loadConfig, isPathAllowed } from "./config.ts";
 import { selectProvider } from "./providers.ts";
-import { isPathReadable, isPathSearchable, resolveToolPath, resolveRealPath } from "./guard.ts";
+import { expandHomePath, isPathReadable, isPathSearchable, resolveToolPath, resolveRealPath } from "./guard.ts";
 
 let _version = "unknown";
 try {
@@ -45,18 +45,35 @@ export function describeBackgroundProcesses(providerName: string, allowBackgroun
   return "kept running";
 }
 
-// pi.getSettings() was added in Pi 0.99.0; on older Pi, shellPath can't be read.
-export function readShellPath(pi: Pick<ExtensionAPI, "getSettings">, warn: (message: string) => void): string | undefined {
+export interface ShellSettings {
+  shellPath?: string;
+  commandPrefix?: string;
+}
+
+// The shell settings Pi passes to its own bash tool, which this extension replaces.
+// pi.getSettings() was added in Pi 0.99.0; on older Pi they can't be read.
+export function readShellSettings(pi: Pick<ExtensionAPI, "getSettings">, warn: (message: string) => void): ShellSettings {
   if (typeof pi.getSettings !== "function") {
-    warn("[pi-sandbox] This Pi version has no pi.getSettings() (added in 0.99.0), so the shellPath setting is ignored and bash commands use the default shell");
-    return undefined;
+    warn("[pi-sandbox] This Pi version has no pi.getSettings() (added in 0.99.0), so the shellPath and shellCommandPrefix settings are ignored for bash commands");
+    return {};
   }
+  let settings: ReturnType<ExtensionAPI["getSettings"]>;
   try {
-    return pi.getSettings().shellPath;
+    settings = pi.getSettings();
   } catch {
     // Not available until the extension runtime is initialized.
-    return undefined;
+    return {};
   }
+  return {
+    // Pi expands a leading ~ in shellPath, but getSettings() returns the raw value.
+    shellPath: settings.shellPath ? expandHomePath(settings.shellPath) : undefined,
+    commandPrefix: settings.shellCommandPrefix || undefined,
+  };
+}
+
+// Same format as Pi's bash tool: the prefix runs first, on its own line.
+export function applyCommandPrefix(command: string, commandPrefix: string | undefined): string {
+  return commandPrefix ? `${commandPrefix}\n${command}` : command;
 }
 
 export function resolveStartupOverrides(
@@ -174,12 +191,12 @@ export default function (pi: ExtensionAPI) {
       console.warn(message);
     }
   };
-  const getShellPath = () => readShellPath(pi, warnOnce);
   type ExecOptions = Parameters<ReturnType<typeof createLocalBashOperations>["exec"]>[2];
   const dynamicOps = {
-    exec(command: string, cwd: string, options: ExecOptions) {
+    exec(rawCommand: string, cwd: string, options: ExecOptions) {
       const state = getState();
-      const shellPath = getShellPath();
+      const { shellPath, commandPrefix } = readShellSettings(pi, warnOnce);
+      const command = applyCommandPrefix(rawCommand, commandPrefix);
       const localOps = createLocalBashOperations({ shellPath });
       if (!state.enabled) {
         return localOps.exec(command, cwd, options);

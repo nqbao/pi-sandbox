@@ -1,6 +1,8 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { applyReadOnlyOverride, assertSandboxProviderAvailable, describeBackgroundProcesses, readShellPath, resolveStartupOverrides } from "./index.ts";
+import { applyReadOnlyOverride, assertSandboxProviderAvailable, applyCommandPrefix, describeBackgroundProcesses, readShellSettings, resolveStartupOverrides } from "./index.ts";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import type { SandboxConfig } from "./types.ts";
 
 describe("applyReadOnlyOverride", () => {
@@ -76,28 +78,45 @@ describe("describeBackgroundProcesses", () => {
   });
 });
 
-describe("readShellPath", () => {
-  const settings = (shellPath?: string) => () => ({ shellPath }) as ReturnType<Parameters<typeof readShellPath>[0]["getSettings"]>;
+describe("readShellSettings", () => {
+  type Pi = Parameters<typeof readShellSettings>[0];
+  const withSettings = (settings: Record<string, unknown>): Pi => ({ getSettings: () => settings as ReturnType<Pi["getSettings"]> });
 
-  it("returns Pi's shellPath setting", () => {
+  it("returns Pi's shellPath and shellCommandPrefix settings", () => {
     const warnings: string[] = [];
-    assert.equal(readShellPath({ getSettings: settings("/opt/bash") }, (m) => warnings.push(m)), "/opt/bash");
+    const result = readShellSettings(withSettings({ shellPath: "/opt/bash", shellCommandPrefix: "shopt -s expand_aliases" }), (m) => warnings.push(m));
+    assert.deepEqual(result, { shellPath: "/opt/bash", commandPrefix: "shopt -s expand_aliases" });
     assert.deepEqual(warnings, []);
+  });
+
+  it("expands a leading ~ in shellPath like Pi does", () => {
+    assert.equal(readShellSettings(withSettings({ shellPath: "~/bin/bash" }), () => {}).shellPath, join(homedir(), "bin/bash"));
+  });
+
+  it("returns nothing when the settings are unset", () => {
+    assert.deepEqual(readShellSettings(withSettings({}), () => {}), { shellPath: undefined, commandPrefix: undefined });
   });
 
   it("warns when this Pi version has no getSettings", () => {
     const warnings: string[] = [];
-    assert.equal(readShellPath({} as Parameters<typeof readShellPath>[0], (m) => warnings.push(m)), undefined);
+    assert.deepEqual(readShellSettings({} as Pi, (m) => warnings.push(m)), {});
     assert.equal(warnings.length, 1);
-    assert.match(warnings[0], /shellPath setting is ignored/);
+    assert.match(warnings[0], /shellPath and shellCommandPrefix settings are ignored/);
   });
 
-  it("returns undefined without warning before the runtime is initialized", () => {
+  it("returns nothing without warning before the runtime is initialized", () => {
     const warnings: string[] = [];
     const notInitialized = () => {
       throw new Error("Extension runtime not initialized");
     };
-    assert.equal(readShellPath({ getSettings: notInitialized }, (m) => warnings.push(m)), undefined);
+    assert.deepEqual(readShellSettings({ getSettings: notInitialized }, (m) => warnings.push(m)), {});
     assert.deepEqual(warnings, []);
+  });
+});
+
+describe("applyCommandPrefix", () => {
+  it("puts the prefix on its own line before the command, like Pi's bash tool", () => {
+    assert.equal(applyCommandPrefix("ls", "source ~/.aliases"), "source ~/.aliases\nls");
+    assert.equal(applyCommandPrefix("ls", undefined), "ls");
   });
 });
