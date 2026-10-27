@@ -484,3 +484,35 @@ describe("execSandboxed", () => {
     assert.equal(result.cleanedUp, true);
   });
 });
+
+describe("buildBwrapSetup namespaces", () => {
+  const flagsFor = (overrides: Partial<SandboxConfig>) => {
+    const workspace = mkdtempSync(join(tmpdir(), "pi-sandbox-workspace-"));
+    try {
+      const setup = buildBwrapSetup(workspace, {
+        enabled: true,
+        readOnly: false,
+        denyRead: [],
+        writable: [workspace],
+        denyWithin: [],
+        network: true,
+        ...overrides,
+      }, workspace);
+      setup.cleanup();
+      return setup.args.filter((arg) => arg.startsWith("--unshare") || arg === "--share-net");
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  };
+
+  it("gives each command its own PID namespace by default", () => {
+    assert.deepEqual(flagsFor({}), ["--unshare-all", "--share-net"]);
+    assert.deepEqual(flagsFor({ network: false }), ["--unshare-all"]);
+  });
+
+  it("keeps every namespace but PID when allowBackgroundProcesses is set", () => {
+    const shared = ["--unshare-user-try", "--unshare-ipc", "--unshare-uts", "--unshare-cgroup-try"];
+    assert.deepEqual(flagsFor({ allowBackgroundProcesses: true }), shared);
+    assert.deepEqual(flagsFor({ allowBackgroundProcesses: true, network: false }), [...shared, "--unshare-net"]);
+  });
+});

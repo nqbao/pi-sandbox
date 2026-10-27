@@ -175,11 +175,20 @@ export function buildBwrapSetup(
   const args: string[] = [];
   const cleanupDirs: string[] = [];
 
-  args.push("--unshare-all");
-  args.push("--die-with-parent");
-  if (config.network) {
-    args.push("--share-net");
+  if (config.allowBackgroundProcesses) {
+    // --unshare-all minus --unshare-pid: without a PID namespace of its own, background jobs
+    // aren't killed when the command's shell exits.
+    args.push("--unshare-user-try", "--unshare-ipc", "--unshare-uts", "--unshare-cgroup-try");
+    if (!config.network) {
+      args.push("--unshare-net");
+    }
+  } else {
+    args.push("--unshare-all");
+    if (config.network) {
+      args.push("--share-net");
+    }
   }
+  args.push("--die-with-parent");
 
   args.push("--dev", "/dev");
   args.push("--proc", "/proc");

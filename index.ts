@@ -317,6 +317,7 @@ export default function (pi: ExtensionAPI) {
         `Provider:     ${activeProvider.name}${enabled && activeProvider.name === "none" ? " (unavailable)" : ""}`,
         `Read-only:    ${config.readOnly ? "yes" : "no"}`,
         `Network:      ${config.network ? "allowed" : "blocked"}`,
+        `Background:   ${config.allowBackgroundProcesses ? "allowed (Linux: no PID namespace)" : "killed when command exits (Linux)"}`,
         `Writable:`,
         ...(config.writable.length > 0 ? config.writable.map((p) => `  - ${p}`) : ["  - none"]),
       ];

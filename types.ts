@@ -21,6 +21,12 @@ export interface SandboxConfig {
   readOnlyMounts?: string[];
   /** Allow outbound network access. Default: true. */
   network: boolean;
+  /**
+   * Linux only: let background jobs (`cmd &`) keep running after the command returns, by not
+   * giving each command its own PID namespace. Sandboxed commands can then see and signal
+   * host processes. Default: false.
+   */
+  allowBackgroundProcesses?: boolean;
   /** Force a specific provider: "auto" | "sandbox-exec" | "bubblewrap" | "none". Default: "auto". */
   provider?: SandboxProviderType;
 }
