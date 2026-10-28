@@ -35,6 +35,8 @@ Behavior depends on the platform:
 - Linux: uses `bubblewrap`
 - if no supported provider is available and sandboxing is enabled: bash commands fail with an error rather than running unsandboxed
 
+The sandbox is **off by default**. Turn it on with `"enabled": true` in `sandbox.json`, or for a single run with `--sandbox` (or `--sandbox-readonly`). `/sandbox-enable` turns it on for the current Pi process.
+
 ## Configuration
 
 The extension reads `sandbox.json` from:
@@ -46,7 +48,7 @@ The file is read once when the session starts. Edits made later don't apply unti
 
 Supported fields:
 
-- `enabled`: turn the extension on or off globally
+- `enabled`: turn the sandbox on or off globally, default `false`
 - `allowRead`: paths to opt out of the default read deny list (see below)
 - `denyRead`: additional paths to block for Pi's built-in read-only file tools
 - `writable`: directories Pi is allowed to modify
@@ -161,9 +163,9 @@ Runtime controls:
 Startup flags:
 
 ```bash
-pi -e ./index.ts --sandbox
-pi -e ./index.ts --sandbox-readonly
-pi -e ./index.ts --no-sandbox
+pi -e ./index.ts --sandbox            # turn the sandbox on for this run
+pi -e ./index.ts --sandbox-readonly   # turn it on with all writes blocked
+pi -e ./index.ts --no-sandbox         # turn it off, even if sandbox.json enables it
 ```
 
 ## Package

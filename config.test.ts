@@ -8,8 +8,12 @@ import { join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
 describe("resolveEnabled", () => {
-  it("defaults to enabled", () => {
-    assert.equal(resolveEnabled(undefined), true);
+  it("defaults to disabled", () => {
+    assert.equal(resolveEnabled(undefined), false);
+  });
+
+  it("falls back to disabled for non-boolean values", () => {
+    assert.equal(resolveEnabled("true"), false);
   });
 
   it("accepts explicit booleans", () => {
@@ -63,7 +67,6 @@ describe("loadConfig", () => {
 
   it("always protects Pi sandbox config paths", () => {
     const { config } = loadConfig("/workspace");
-    assert.equal(config.enabled, true);
     const protectedPaths = getProtectedConfigPaths();
 
     for (const path of protectedPaths) {

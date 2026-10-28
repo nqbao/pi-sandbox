@@ -238,14 +238,15 @@ function mergeDenyWithin(raw: unknown, resolver: PathResolver, protectedPaths: s
   return [...new Set([...resolved, ...protectedPaths])];
 }
 
+// Off unless sandbox.json sets enabled: true or Pi is started with --sandbox.
 export function resolveEnabled(raw: unknown): boolean {
   if (typeof raw === "boolean") {
     return raw;
   }
   if (raw !== undefined) {
-    console.warn(`[pi-sandbox] Invalid enabled value "${String(raw)}", falling back to true`);
+    console.warn(`[pi-sandbox] Invalid enabled value "${String(raw)}", falling back to false`);
   }
-  return true;
+  return false;
 }
 
 export function resolveReadOnly(raw: unknown): boolean {
