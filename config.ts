@@ -123,33 +123,35 @@ export interface ConfigLoadResult {
   warnings: string[];
 }
 
-/** Reads a config file, returning an empty object when it is missing or invalid. */
-function readConfigFile(path: string): Partial<SandboxConfig> {
+/** Reads a config file and reports whether it exists and parses. */
+function readConfigFile(path: string): { raw: Partial<SandboxConfig>; status: "missing" | "ok" | "invalid" } {
   if (!existsSync(path)) {
-    return {};
+    return { raw: {}, status: "missing" };
   }
   try {
     const parsed = JSON.parse(readFileSync(path, "utf-8").replace(/^\uFEFF/, ""));
     if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
       throw new TypeError("expected a JSON object");
     }
-    return parsed as Partial<SandboxConfig>;
+    return { raw: parsed as Partial<SandboxConfig>, status: "ok" };
   } catch {
     console.warn(`[pi-sandbox] Failed to parse ${path}, ignoring it`);
-    return {};
+    return { raw: {}, status: "invalid" };
   }
 }
 
-function readGlobalConfig(): { raw: Partial<SandboxConfig>; sources: string[] } {
-  const sources: string[] = [];
-  for (const getPath of GLOBAL_CONFIG_SEARCH_PATHS) {
-    const path = getPath();
-    if (existsSync(path)) {
-      sources.push(path);
-      return { raw: readConfigFile(path), sources };
+/**
+ * Uses the first global config that parses. A broken file falls through to the next path, so a
+ * leftover sandbox.json in the agent dir can't silently replace `~/.pi/agent/sandbox.json`.
+ */
+function readGlobalConfig(paths: string[]): { raw: Partial<SandboxConfig>; sources: string[] } {
+  for (const path of paths) {
+    const result = readConfigFile(path);
+    if (result.status === "ok") {
+      return { raw: result.raw, sources: [path] };
     }
   }
-  return { raw: {}, sources };
+  return { raw: {}, sources: [] };
 }
 
 /**
@@ -214,17 +216,25 @@ export function mergeProjectConfig(
   return { raw, warnings };
 }
 
-export function loadConfig(workspaceDir: string): ConfigLoadResult {
+export interface LoadConfigOptions {
+  /**
+   * Global config files to try in order; the first that parses wins. Defaults to
+   * `$(pi agent dir)/sandbox.json`, then `~/.pi/agent/sandbox.json`.
+   */
+  globalConfigPaths?: string[];
+}
+
+export function loadConfig(workspaceDir: string, options: LoadConfigOptions = {}): ConfigLoadResult {
   const pathResolver = createPathResolver(workspaceDir);
 
-  const global = readGlobalConfig();
+  const global = readGlobalConfig(options.globalConfigPaths ?? getProtectedConfigPaths());
   const projectPath = getProjectConfigPath(workspaceDir);
-  const projectRaw = readConfigFile(projectPath);
+  const project = readConfigFile(projectPath);
   const sources = [...global.sources];
-  if (existsSync(projectPath)) {
+  if (project.status === "ok") {
     sources.push(projectPath);
   }
-  const { raw, warnings } = mergeProjectConfig(global.raw, projectRaw, projectPath, global.sources[0]);
+  const { raw, warnings } = mergeProjectConfig(global.raw, project.raw, projectPath, global.sources[0]);
 
   const { denyRead, allowRead } = mergeDenyRead(raw.denyRead, raw.allowRead, pathResolver);
   const protectedPaths = getProtectedPiPaths(workspaceDir);

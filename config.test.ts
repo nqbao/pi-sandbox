@@ -1,4 +1,4 @@
-import { describe, it } from "node:test";
+import { after, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { createPathResolver, loadConfig, getProtectedConfigPaths, getProtectedPiPaths, getRequiredWritablePaths, getProjectConfigPath, resolveEnabled, resolveReadOnly, computeEffectiveDenyRead } from "./config.ts";
 import { isPathAllowed, isPathReadable, resolveRealPath } from "./guard.ts";
@@ -6,6 +6,19 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
+
+// Tests must never pick up the developer's real ~/.pi/agent/sandbox.json, so every loadConfig
+// call here passes an explicit (missing) global config path.
+const EMPTY_DIR = mkdtempSync(join(tmpdir(), "pi-sandbox-empty-"));
+const NO_GLOBAL_CONFIG = [join(EMPTY_DIR, "sandbox.json")];
+
+function load(workspaceDir = "/workspace", globalConfigPaths: string[] = NO_GLOBAL_CONFIG) {
+  return loadConfig(workspaceDir, { globalConfigPaths });
+}
+
+after(() => {
+  rmSync(EMPTY_DIR, { recursive: true, force: true });
+});
 
 describe("resolveEnabled", () => {
   it("defaults to enabled", () => {
@@ -47,7 +60,7 @@ describe("createPathResolver", () => {
 });
 
 describe("loadConfig", () => {  it("always includes required Pi support paths in writable roots", () => {
-    const { config, pathResolver } = loadConfig("/workspace");
+    const { config, pathResolver } = load();
     const requiredPaths = getRequiredWritablePaths(pathResolver);
 
     for (const path of requiredPaths) {
@@ -61,7 +74,7 @@ describe("loadConfig", () => {  it("always includes required Pi support paths in
   });
 
   it("always protects Pi sandbox config paths", () => {
-    const { config } = loadConfig("/workspace");
+    const { config } = load();
     assert.equal(config.enabled, true);
     const protectedPaths = getProtectedConfigPaths();
 
@@ -76,7 +89,7 @@ describe("loadConfig", () => {  it("always includes required Pi support paths in
   });
 
   it("keeps protected config paths denied even if parent directories are writable", () => {
-    const { config } = loadConfig("/workspace");
+    const { config } = load();
     const protectedPaths = getProtectedConfigPaths();
 
     for (const path of protectedPaths) {
@@ -87,7 +100,7 @@ describe("loadConfig", () => {  it("always includes required Pi support paths in
   });
 
   it("write-protects Pi extension, package, settings, and trust paths", () => {
-    const { config } = loadConfig("/workspace");
+    const { config } = load();
     const agentDir = getAgentDir();
     const expected = [
       join(agentDir, "extensions", "evil.ts"),
@@ -105,13 +118,18 @@ describe("loadConfig", () => {  it("always includes required Pi support paths in
       assert.equal(isPathAllowed(resolveRealPath(path), config), false, `expected ${path} to be write-protected`);
     }
     // The rest of the agent dir isn't writable by default either; it's mounted read-only.
-    assert.equal(isPathAllowed(resolveRealPath(join(agentDir, "skills", "x", "SKILL.md")), config), false);
+    const skillsPath = resolveRealPath(join(agentDir, "skills", "x", "SKILL.md"));
+    if (!skillsPath.startsWith(resolveRealPath(tmpdir()) + "/")) {
+      // When HOME points inside ${TMP} (a test fixture, not a real setup), the agent dir is
+      // writable through the TMP root, so only assert the guard for a normal location.
+      assert.equal(isPathAllowed(skillsPath, config), false);
+    }
     assert.equal(config.writable.includes(resolveRealPath(agentDir)), false);
     assert.deepEqual(config.readOnlyMounts, [resolveRealPath(agentDir)]);
   });
 
   it("denies reading Pi API keys and common credential files by default", () => {
-    const { config } = loadConfig("/workspace");
+    const { config } = load();
     const expected = [
       join(getAgentDir(), "auth.json"),
       join(homedir(), ".config", "gh", "hosts.yml"),
@@ -131,7 +149,7 @@ describe("loadConfig", () => {  it("always includes required Pi support paths in
     writeFileSync(configPath, JSON.stringify({ allowRead: ["~/.npmrc", "${AGENT_DIR}/auth.json"] }));
     process.env.PI_CODING_AGENT_DIR = dir;
     try {
-      const { config } = loadConfig("/workspace");
+      const { config } = load("/workspace", [configPath]);
       assert.equal(isPathReadable(resolveRealPath(join(homedir(), ".npmrc")), config), true);
       assert.equal(isPathReadable(resolveRealPath(join(dir, "auth.json")), config), true);
     } finally {
@@ -141,14 +159,62 @@ describe("loadConfig", () => {  it("always includes required Pi support paths in
     }
   });
 
+  it("reads the global config from the agent dir by default", () => {
+    const dir = mkdtempSync(join(tmpdir(), "pi-sandbox-default-global-"));
+    const previous = process.env.PI_CODING_AGENT_DIR;
+    writeFileSync(join(dir, "sandbox.json"), JSON.stringify({ network: false }));
+    process.env.PI_CODING_AGENT_DIR = dir;
+    try {
+      const { config, sources } = loadConfig("/workspace");
+      assert.equal(config.network, false);
+      assert.deepEqual(sources, [join(dir, "sandbox.json")]);
+    } finally {
+      if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previous;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("falls through to the next global config when one fails to parse", () => {
+    const dir = mkdtempSync(join(tmpdir(), "pi-sandbox-broken-global-"));
+    const broken = join(dir, "agent", "sandbox.json");
+    const valid = join(dir, "agent-fallback", "sandbox.json");
+    mkdirSync(dirname(broken), { recursive: true });
+    mkdirSync(dirname(valid), { recursive: true });
+    writeFileSync(broken, "{ not json");
+    writeFileSync(valid, JSON.stringify({ network: false, readOnly: true }));
+    try {
+      const { config, sources } = load("/workspace", [broken, valid]);
+      assert.equal(config.network, false);
+      assert.equal(config.readOnly, true);
+      assert.deepEqual(sources, [valid]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not report an unparseable global config as a source", () => {
+    const dir = mkdtempSync(join(tmpdir(), "pi-sandbox-broken-only-"));
+    const broken = join(dir, "sandbox.json");
+    writeFileSync(broken, "{ not json");
+    try {
+      const { config, sources } = load("/workspace", [broken]);
+      assert.deepEqual(sources, []);
+      assert.equal(config.network, true);
+      assert.equal(config.readOnly, false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("write-protects .git/config by default", () => {
-    const { config } = loadConfig("/workspace");
+    const { config } = load();
     assert.equal(isPathAllowed(resolveRealPath("/workspace/.git/config"), config), false);
     assert.equal(isPathAllowed(resolveRealPath("/workspace/.git/index"), config), true);
   });
 
   it("exposes protected files and directories separately", () => {
-    const { config } = loadConfig("/workspace");
+    const { config } = load();
     const { files, dirs } = getProtectedPiPaths("/workspace");
     for (const path of files) {
       assert.ok(config.protectedFiles?.includes(resolveRealPath(path)), `expected ${path} in protectedFiles`);
@@ -159,49 +225,53 @@ describe("loadConfig", () => {  it("always includes required Pi support paths in
   });
 
   it("defaults denyRead to the resolved DEFAULT_DENY_READ paths", () => {
-    const { config } = loadConfig("/workspace");
+    const { config } = load();
     assert.equal(config.denyRead.length > 0, true);
     assert.equal(config.allowRead.length, 0);
   });
 
   it("defaults readOnly to false", () => {
-    const { config } = loadConfig("/workspace");
+    const { config } = load();
     assert.equal(config.readOnly, false);
   });
 });
 
 describe("project-level sandbox.json", () => {
-  function withFixtures(
-    files: { global?: unknown; project?: unknown },
-    run: (workspace: string, agentDir: string) => void,
-  ) {
+  type FixtureContext = {
+    workspace: string;
+    agentDir: string;
+    loadConfigFor: (options?: { globalConfigPaths?: string[] }) => ReturnType<typeof loadConfig>;
+  };
+
+  function withFixtures(files: { global?: unknown; project?: unknown }, run: (ctx: FixtureContext) => void) {
     const root = mkdtempSync(join(tmpdir(), "pi-sandbox-project-"));
     const workspace = join(root, "workspace");
     const agentDir = join(root, "agent");
-    mkdirSync(workspace, { recursive: true });
+    mkdirSync(join(workspace, ".pi"), { recursive: true });
     mkdirSync(agentDir, { recursive: true });
     const write = (path: string, content: unknown) => {
       mkdirSync(dirname(path), { recursive: true });
       writeFileSync(path, JSON.stringify(content));
     };
-    mkdirSync(join(workspace, ".pi"), { recursive: true });
     if (files.global !== undefined) write(join(agentDir, "sandbox.json"), files.global);
     if (files.project !== undefined) write(join(workspace, ".pi", "sandbox.json"), files.project);
 
-    const previous = process.env.PI_CODING_AGENT_DIR;
-    process.env.PI_CODING_AGENT_DIR = agentDir;
+    // Only the fixture agent dir is searched, so the real ~/.pi/agent is never consulted.
+    const globalConfigPaths = [join(agentDir, "sandbox.json")];
     try {
-      run(workspace, agentDir);
+      run({
+        workspace,
+        agentDir,
+        loadConfigFor: (options = {}) => loadConfig(workspace, { globalConfigPaths, ...options }),
+      });
     } finally {
-      if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
-      else process.env.PI_CODING_AGENT_DIR = previous;
       rmSync(root, { recursive: true, force: true });
     }
   }
 
   it("is read from .pi/sandbox.json and reported as a config source", () => {
-    withFixtures({ project: { enabled: true } }, (workspace) => {
-      const { sources, config, warnings } = loadConfig(workspace);
+    withFixtures({ project: { enabled: true } }, ({ workspace, loadConfigFor }) => {
+      const { sources, config, warnings } = loadConfigFor();
       const projectPath = getProjectConfigPath(workspace);
       assert.ok(sources.includes(projectPath));
       assert.deepEqual(warnings, []);
@@ -210,8 +280,8 @@ describe("project-level sandbox.json", () => {
   });
 
   it("lists global first, then project", () => {
-    withFixtures({ global: { network: true }, project: { readOnly: true } }, (workspace, agentDir) => {
-      const { sources } = loadConfig(workspace);
+    withFixtures({ global: { network: true }, project: { readOnly: true } }, ({ workspace, agentDir, loadConfigFor }) => {
+      const { sources } = loadConfigFor();
       assert.deepEqual(sources, [join(agentDir, "sandbox.json"), getProjectConfigPath(workspace)]);
     });
   });
@@ -219,8 +289,8 @@ describe("project-level sandbox.json", () => {
   it("can tighten switches (enabled=true, readOnly=true, network=false)", () => {
     withFixtures(
       { global: { enabled: false, network: true }, project: { enabled: true, readOnly: true, network: false } },
-      (workspace) => {
-        const { config, warnings } = loadConfig(workspace);
+      ({ loadConfigFor }) => {
+        const { config, warnings } = loadConfigFor();
         assert.equal(config.enabled, true);
         assert.equal(config.readOnly, true);
         assert.equal(config.network, false);
@@ -232,8 +302,8 @@ describe("project-level sandbox.json", () => {
   it("cannot loosen switches (enabled=false, readOnly=false, network=true)", () => {
     withFixtures(
       { global: { enabled: true, readOnly: true, network: false }, project: { enabled: false, readOnly: false, network: true } },
-      (workspace) => {
-        const { config, warnings } = loadConfig(workspace);
+      ({ loadConfigFor }) => {
+        const { config, warnings } = loadConfigFor();
         assert.equal(config.enabled, true);
         assert.equal(config.readOnly, true);
         assert.equal(config.network, false);
@@ -244,8 +314,8 @@ describe("project-level sandbox.json", () => {
   });
 
   it("cannot disable a sandbox that is on by default", () => {
-    withFixtures({ project: { enabled: false } }, (workspace) => {
-      assert.equal(loadConfig(workspace).config.enabled, true);
+    withFixtures({ project: { enabled: false } }, ({ loadConfigFor }) => {
+      assert.equal(loadConfigFor().config.enabled, true);
     });
   });
 
@@ -255,8 +325,8 @@ describe("project-level sandbox.json", () => {
         global: { denyRead: ["~/secrets-a"], denyWithin: ["${WORKSPACE}/hooks"] },
         project: { denyRead: ["~/secrets-b"], denyWithin: ["${WORKSPACE}/scripts"] },
       },
-      (workspace) => {
-        const { config } = loadConfig(workspace);
+      ({ workspace, loadConfigFor }) => {
+        const { config } = loadConfigFor();
         assert.equal(isPathReadable(resolveRealPath(join(homedir(), "secrets-a")), config), false);
         assert.equal(isPathReadable(resolveRealPath(join(homedir(), "secrets-b")), config), false);
         assert.equal(isPathAllowed(resolveRealPath(join(workspace, "hooks", "pre-commit")), config), false);
@@ -266,18 +336,12 @@ describe("project-level sandbox.json", () => {
   });
 
   it("keeps the default denyWithin entries when the global config leaves it unset", () => {
-    withFixtures(
-      {
-        global: {},
-        project: { denyWithin: ["${WORKSPACE}/generated"] },
-      },
-      (workspace) => {
-        const { config } = loadConfig(workspace);
-        assert.equal(isPathAllowed(resolveRealPath(join(workspace, "generated", "out.js")), config), false);
-        assert.equal(isPathAllowed(resolveRealPath(join(workspace, ".git", "hooks", "pre-commit")), config), false);
-        assert.equal(isPathAllowed(resolveRealPath(join(workspace, ".git", "config")), config), false);
-      },
-    );
+    withFixtures({ global: {}, project: { denyWithin: ["${WORKSPACE}/generated"] } }, ({ workspace, loadConfigFor }) => {
+      const { config } = loadConfigFor();
+      assert.equal(isPathAllowed(resolveRealPath(join(workspace, "generated", "out.js")), config), false);
+      assert.equal(isPathAllowed(resolveRealPath(join(workspace, ".git", "hooks", "pre-commit")), config), false);
+      assert.equal(isPathAllowed(resolveRealPath(join(workspace, ".git", "config")), config), false);
+    });
   });
 
   it("ignores allowRead, writable, provider, and allowBackgroundProcesses", () => {
@@ -291,8 +355,8 @@ describe("project-level sandbox.json", () => {
           allowBackgroundProcesses: true,
         },
       },
-      (workspace) => {
-        const { config, warnings } = loadConfig(workspace);
+      ({ loadConfigFor }) => {
+        const { config, warnings } = loadConfigFor();
         assert.equal(warnings.length, 4);
         for (const field of ["allowRead", "writable", "provider", "allowBackgroundProcesses"]) {
           assert.ok(warnings.some((w) => w.includes(`Ignoring ${field}`)), `expected a warning for ${field}`);
@@ -307,8 +371,8 @@ describe("project-level sandbox.json", () => {
   });
 
   it("write-protects the project config file", () => {
-    withFixtures({ project: {} }, (workspace) => {
-      const { config } = loadConfig(workspace);
+    withFixtures({ project: {} }, ({ workspace, loadConfigFor }) => {
+      const { config } = loadConfigFor();
       const projectPath = resolveRealPath(getProjectConfigPath(workspace));
       assert.equal(isPathAllowed(projectPath, config), false);
       assert.ok(config.protectedFiles?.includes(projectPath));
@@ -321,9 +385,10 @@ describe("project-level sandbox.json", () => {
     mkdirSync(join(workspace, ".pi"), { recursive: true });
     writeFileSync(join(workspace, ".pi", "sandbox.json"), "{ not json");
     try {
-      const { config } = loadConfig(workspace);
+      const { config, sources } = load(workspace);
       assert.equal(config.enabled, true);
       assert.equal(config.readOnly, false);
+      assert.equal(sources.includes(getProjectConfigPath(workspace)), false);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

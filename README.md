@@ -43,7 +43,7 @@ The extension reads `sandbox.json` from:
 - `~/.pi/agent/sandbox.json`
 - `${WORKSPACE}/.pi/sandbox.json` (project level, optional)
 
-The global file is read first, then the project file layers on top of it (see [Project-level policy](#project-level-policy)).
+The global file is read first, then the project file layers on top of it (see [Project-level policy](#project-level-policy)). If a global file exists but can't be parsed, it is reported and the next global path is tried, so a stray broken `sandbox.json` in the agent dir doesn't replace `~/.pi/agent/sandbox.json`. Only files that were actually used show up in `/sandbox-status`.
 
 Config files are read once when the session starts. Edits made later don't apply until you run `/sandbox-reload` or restart Pi, so a change made from inside the sandbox can't take effect between commands.
 
