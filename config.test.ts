@@ -1,10 +1,10 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { createPathResolver, loadConfig, getProtectedConfigPaths, getProtectedPiPaths, getRequiredWritablePaths, resolveEnabled, resolveReadOnly, computeEffectiveDenyRead } from "./config.ts";
+import { createPathResolver, loadConfig, getProtectedConfigPaths, getProtectedPiPaths, getRequiredWritablePaths, getProjectConfigPath, resolveEnabled, resolveReadOnly, computeEffectiveDenyRead } from "./config.ts";
 import { isPathAllowed, isPathReadable, resolveRealPath } from "./guard.ts";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
 describe("resolveEnabled", () => {
@@ -46,8 +46,7 @@ describe("createPathResolver", () => {
   });
 });
 
-describe("loadConfig", () => {
-  it("always includes required Pi support paths in writable roots", () => {
+describe("loadConfig", () => {  it("always includes required Pi support paths in writable roots", () => {
     const { config, pathResolver } = loadConfig("/workspace");
     const requiredPaths = getRequiredWritablePaths(pathResolver);
 
@@ -168,6 +167,166 @@ describe("loadConfig", () => {
   it("defaults readOnly to false", () => {
     const { config } = loadConfig("/workspace");
     assert.equal(config.readOnly, false);
+  });
+});
+
+describe("project-level sandbox.json", () => {
+  function withFixtures(
+    files: { global?: unknown; project?: unknown },
+    run: (workspace: string, agentDir: string) => void,
+  ) {
+    const root = mkdtempSync(join(tmpdir(), "pi-sandbox-project-"));
+    const workspace = join(root, "workspace");
+    const agentDir = join(root, "agent");
+    mkdirSync(workspace, { recursive: true });
+    mkdirSync(agentDir, { recursive: true });
+    const write = (path: string, content: unknown) => {
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, JSON.stringify(content));
+    };
+    mkdirSync(join(workspace, ".pi"), { recursive: true });
+    if (files.global !== undefined) write(join(agentDir, "sandbox.json"), files.global);
+    if (files.project !== undefined) write(join(workspace, ".pi", "sandbox.json"), files.project);
+
+    const previous = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+    try {
+      run(workspace, agentDir);
+    } finally {
+      if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previous;
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+
+  it("is read from .pi/sandbox.json and reported as a config source", () => {
+    withFixtures({ project: { enabled: true } }, (workspace) => {
+      const { sources, config, warnings } = loadConfig(workspace);
+      const projectPath = getProjectConfigPath(workspace);
+      assert.ok(sources.includes(projectPath));
+      assert.deepEqual(warnings, []);
+      assert.equal(config.enabled, true);
+    });
+  });
+
+  it("lists global first, then project", () => {
+    withFixtures({ global: { network: true }, project: { readOnly: true } }, (workspace, agentDir) => {
+      const { sources } = loadConfig(workspace);
+      assert.deepEqual(sources, [join(agentDir, "sandbox.json"), getProjectConfigPath(workspace)]);
+    });
+  });
+
+  it("can tighten switches (enabled=true, readOnly=true, network=false)", () => {
+    withFixtures(
+      { global: { enabled: false, network: true }, project: { enabled: true, readOnly: true, network: false } },
+      (workspace) => {
+        const { config, warnings } = loadConfig(workspace);
+        assert.equal(config.enabled, true);
+        assert.equal(config.readOnly, true);
+        assert.equal(config.network, false);
+        assert.deepEqual(warnings, []);
+      },
+    );
+  });
+
+  it("cannot loosen switches (enabled=false, readOnly=false, network=true)", () => {
+    withFixtures(
+      { global: { enabled: true, readOnly: true, network: false }, project: { enabled: false, readOnly: false, network: true } },
+      (workspace) => {
+        const { config, warnings } = loadConfig(workspace);
+        assert.equal(config.enabled, true);
+        assert.equal(config.readOnly, true);
+        assert.equal(config.network, false);
+        assert.equal(warnings.length, 3);
+        for (const warning of warnings) assert.match(warning, /can only tighten the policy/);
+      },
+    );
+  });
+
+  it("cannot disable a sandbox that is on by default", () => {
+    withFixtures({ project: { enabled: false } }, (workspace) => {
+      assert.equal(loadConfig(workspace).config.enabled, true);
+    });
+  });
+
+  it("adds denyRead and denyWithin entries to the global ones", () => {
+    withFixtures(
+      {
+        global: { denyRead: ["~/secrets-a"], denyWithin: ["${WORKSPACE}/hooks"] },
+        project: { denyRead: ["~/secrets-b"], denyWithin: ["${WORKSPACE}/scripts"] },
+      },
+      (workspace) => {
+        const { config } = loadConfig(workspace);
+        assert.equal(isPathReadable(resolveRealPath(join(homedir(), "secrets-a")), config), false);
+        assert.equal(isPathReadable(resolveRealPath(join(homedir(), "secrets-b")), config), false);
+        assert.equal(isPathAllowed(resolveRealPath(join(workspace, "hooks", "pre-commit")), config), false);
+        assert.equal(isPathAllowed(resolveRealPath(join(workspace, "scripts", "build.sh")), config), false);
+      },
+    );
+  });
+
+  it("keeps the default denyWithin entries when the global config leaves it unset", () => {
+    withFixtures(
+      {
+        global: {},
+        project: { denyWithin: ["${WORKSPACE}/generated"] },
+      },
+      (workspace) => {
+        const { config } = loadConfig(workspace);
+        assert.equal(isPathAllowed(resolveRealPath(join(workspace, "generated", "out.js")), config), false);
+        assert.equal(isPathAllowed(resolveRealPath(join(workspace, ".git", "hooks", "pre-commit")), config), false);
+        assert.equal(isPathAllowed(resolveRealPath(join(workspace, ".git", "config")), config), false);
+      },
+    );
+  });
+
+  it("ignores allowRead, writable, provider, and allowBackgroundProcesses", () => {
+    withFixtures(
+      {
+        global: { network: false },
+        project: {
+          allowRead: ["~/.npmrc"],
+          writable: ["/"],
+          provider: "none",
+          allowBackgroundProcesses: true,
+        },
+      },
+      (workspace) => {
+        const { config, warnings } = loadConfig(workspace);
+        assert.equal(warnings.length, 4);
+        for (const field of ["allowRead", "writable", "provider", "allowBackgroundProcesses"]) {
+          assert.ok(warnings.some((w) => w.includes(`Ignoring ${field}`)), `expected a warning for ${field}`);
+        }
+        // Default-denied credentials stay denied, and writable roots are unchanged.
+        assert.equal(isPathReadable(resolveRealPath(join(homedir(), ".npmrc")), config), false);
+        assert.equal(config.writable.includes(resolveRealPath("/")), false);
+        assert.equal(config.provider, "auto");
+        assert.equal(config.allowBackgroundProcesses, false);
+      },
+    );
+  });
+
+  it("write-protects the project config file", () => {
+    withFixtures({ project: {} }, (workspace) => {
+      const { config } = loadConfig(workspace);
+      const projectPath = resolveRealPath(getProjectConfigPath(workspace));
+      assert.equal(isPathAllowed(projectPath, config), false);
+      assert.ok(config.protectedFiles?.includes(projectPath));
+    });
+  });
+
+  it("ignores an unparseable project config", () => {
+    const root = mkdtempSync(join(tmpdir(), "pi-sandbox-badjson-"));
+    const workspace = join(root, "workspace");
+    mkdirSync(join(workspace, ".pi"), { recursive: true });
+    writeFileSync(join(workspace, ".pi", "sandbox.json"), "{ not json");
+    try {
+      const { config } = loadConfig(workspace);
+      assert.equal(config.enabled, true);
+      assert.equal(config.readOnly, false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 

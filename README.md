@@ -41,8 +41,11 @@ The extension reads `sandbox.json` from:
 
 - `$(pi agent dir)/sandbox.json`
 - `~/.pi/agent/sandbox.json`
+- `${WORKSPACE}/.pi/sandbox.json` (project level, optional)
 
-The file is read once when the session starts. Edits made later don't apply until you run `/sandbox-reload` or restart Pi, so a change made from inside the sandbox can't loosen the policy between commands.
+The global file is read first, then the project file layers on top of it (see [Project-level policy](#project-level-policy)).
+
+Config files are read once when the session starts. Edits made later don't apply until you run `/sandbox-reload` or restart Pi, so a change made from inside the sandbox can't take effect between commands.
 
 Supported fields:
 
@@ -110,6 +113,26 @@ Use `allowRead` to unblock any of these. `sandbox.json` is global, so this appli
 
 `--sandbox-readonly` is a quick way to disable all filesystem writes regardless of `writable`, while keeping read access governed by the existing deny policy.
 
+### Project-level policy
+
+A project can ship `<workspace>/.pi/sandbox.json` so everyone working in the repo gets the same sandbox policy. It is layered over the global file and **can only tighten the policy**, because it comes from the repository and Pi cannot ask for trust on it:
+
+- `denyRead` and `denyWithin` are added to the global entries.
+- `enabled: true`, `readOnly: true`, and `network: false` are applied.
+- `enabled: false`, `readOnly: false`, and `network: true` are ignored with a warning, so cloning a repository can never turn the sandbox off or open it up.
+- `allowRead`, `writable`, `provider`, and `allowBackgroundProcesses` are ignored with a warning. Set them in the global file if you need them.
+
+```json
+{
+  "enabled": true,
+  "network": false,
+  "denyRead": ["${WORKSPACE}/fixtures/private"],
+  "denyWithin": ["${WORKSPACE}/generated"]
+}
+```
+
+The project file is part of the repository, so review it like any other project resource before running Pi in a folder you don't trust. Like the rest of `${WORKSPACE}/.pi`, it is write-protected, so a sandboxed command can't edit the policy it runs under.
+
 For recursive read tools like `grep` and `find`, pi-sandbox blocks starting from a parent path that would traverse into a denied subtree.
 
 And blocks writes to:
@@ -145,7 +168,7 @@ The extension registers a Pi command:
 /sandbox-status
 ```
 
-It shows the active provider, network mode, writable paths, and deny rules.
+It shows the active provider, network mode, writable paths, deny rules, and which `sandbox.json` files were loaded.
 
 Runtime controls:
 

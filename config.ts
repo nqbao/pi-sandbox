@@ -9,10 +9,14 @@ import { expandHomePath, resolveRealPath, stripTrailingSep } from "./guard.ts";
 const VALID_PROVIDERS = new Set<SandboxProviderType>(["auto", "sandbox-exec", "bubblewrap", "none"]);
 
 const CONFIG_FILE = "sandbox.json";
-const CONFIG_SEARCH_PATHS = [
+const PROJECT_CONFIG_DIR = ".pi";
+const GLOBAL_CONFIG_SEARCH_PATHS = [
   () => `${getAgentDir()}/${CONFIG_FILE}`,
   () => `${homedir()}/.pi/agent/${CONFIG_FILE}`,
 ];
+
+// Project-local policy. It comes from the repository, so it can only tighten the global config.
+const IGNORED_PROJECT_FIELDS = ["allowRead", "writable", "provider", "allowBackgroundProcesses"];
 
 export function createPathResolver(workspaceDir: string): PathResolver {
   const vars: Record<string, string> = {
@@ -71,20 +75,24 @@ const DEFAULT_WRITABLE = ["${WORKSPACE}", "${TMP}"];
 const DEFAULT_DENY_WITHIN = ["${WORKSPACE}/.git/hooks", "${WORKSPACE}/.git/config"];
 
 export function getProtectedConfigPaths(): string[] {
-  return CONFIG_SEARCH_PATHS.map((getPath) => resolve(getPath()));
+  return GLOBAL_CONFIG_SEARCH_PATHS.map((getPath) => resolve(getPath()));
+}
+
+export function getProjectConfigPath(workspaceDir: string): string {
+  return resolve(workspaceDir, PROJECT_CONFIG_DIR, CONFIG_FILE);
 }
 
 // Files and directories Pi loads code, credentials, or trust decisions from. The agent must
 // not be able to write these, or it could plant something that runs unsandboxed on next start.
 const PROTECTED_AGENT_FILES = ["settings.json", "trust.json", "mcp.json", "models.json", "auth.json"];
 const PROTECTED_AGENT_DIRS = ["extensions", "npm", "git"];
-const PROJECT_CONFIG_DIR = ".pi";
 
 export function getProtectedPiPaths(workspaceDir: string): { files: string[]; dirs: string[] } {
   const agentDir = resolve(getAgentDir());
   return {
     files: [
       ...getProtectedConfigPaths(),
+      getProjectConfigPath(workspaceDir),
       ...PROTECTED_AGENT_FILES.map((name) => resolve(agentDir, name)),
     ],
     dirs: [
@@ -107,22 +115,116 @@ export function getReadOnlyMounts(): string[] {
   return [resolve(getAgentDir())];
 }
 
-export function loadConfig(workspaceDir: string): { config: SandboxConfig; pathResolver: PathResolver } {
-  const pathResolver = createPathResolver(workspaceDir);
+export interface ConfigLoadResult {
+  config: SandboxConfig;
+  pathResolver: PathResolver;
+  /** Config files that were read, global first, then project. */
+  sources: string[];
+  warnings: string[];
+}
 
-  let raw: Partial<SandboxConfig> = {};
+/** Reads a config file, returning an empty object when it is missing or invalid. */
+function readConfigFile(path: string): Partial<SandboxConfig> {
+  if (!existsSync(path)) {
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(readFileSync(path, "utf-8").replace(/^\uFEFF/, ""));
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new TypeError("expected a JSON object");
+    }
+    return parsed as Partial<SandboxConfig>;
+  } catch {
+    console.warn(`[pi-sandbox] Failed to parse ${path}, ignoring it`);
+    return {};
+  }
+}
 
-  for (const getPath of CONFIG_SEARCH_PATHS) {
-    const p = getPath();
-    if (existsSync(p)) {
-      try {
-        raw = JSON.parse(readFileSync(p, "utf-8").replace(/^\uFEFF/, ""));
-        break;
-      } catch {
-        console.warn(`[pi-sandbox] Failed to parse ${p}, falling back to defaults`);
-      }
+function readGlobalConfig(): { raw: Partial<SandboxConfig>; sources: string[] } {
+  const sources: string[] = [];
+  for (const getPath of GLOBAL_CONFIG_SEARCH_PATHS) {
+    const path = getPath();
+    if (existsSync(path)) {
+      sources.push(path);
+      return { raw: readConfigFile(path), sources };
     }
   }
+  return { raw: {}, sources };
+}
+
+/**
+ * Layers a project config over the global one. A project file ships with the repository, so
+ * it may only tighten a policy: it can block more, never less.
+ */
+export function mergeProjectConfig(
+  globalRaw: Partial<SandboxConfig>,
+  projectRaw: Partial<SandboxConfig>,
+  projectPath: string,
+  globalPath: string | undefined,
+): { raw: Partial<SandboxConfig>; warnings: string[] } {
+  const raw: Partial<SandboxConfig> = { ...globalRaw };
+  const warnings: string[] = [];
+  const hint = `project-level sandbox.json can only tighten the policy; set it in ${globalPath ?? "the global sandbox.json"} instead`;
+
+  // Tightening switches.
+  if (projectRaw.enabled === true) {
+    raw.enabled = true;
+  } else if (projectRaw.enabled !== undefined) {
+    warnings.push(`[pi-sandbox] Ignoring enabled=${JSON.stringify(projectRaw.enabled)} in ${projectPath}: ${hint}`);
+  }
+  if (projectRaw.readOnly === true) {
+    raw.readOnly = true;
+  } else if (projectRaw.readOnly !== undefined) {
+    warnings.push(`[pi-sandbox] Ignoring readOnly=${JSON.stringify(projectRaw.readOnly)} in ${projectPath}: ${hint}`);
+  }
+  if (projectRaw.network === false) {
+    raw.network = false;
+  } else if (projectRaw.network !== undefined) {
+    warnings.push(`[pi-sandbox] Ignoring network=${JSON.stringify(projectRaw.network)} in ${projectPath}: ${hint}`);
+  }
+
+  // Deny lists are additive, so a project can always block more paths. When the global
+  // config leaves a list unset, extend its defaults so the project can't drop them.
+  for (const [field, base] of [
+    ["denyRead", globalRaw.denyRead],
+    ["denyWithin", Array.isArray(globalRaw.denyWithin) ? globalRaw.denyWithin : DEFAULT_DENY_WITHIN],
+  ] as const) {
+    const extra = projectRaw[field];
+    if (extra === undefined) {
+      continue;
+    }
+    if (!Array.isArray(extra)) {
+      warnings.push(`[pi-sandbox] Ignoring ${field} in ${projectPath}: expected an array of paths`);
+      continue;
+    }
+    raw[field] = [...(Array.isArray(base) ? base : []), ...extra];
+  }
+
+  for (const field of IGNORED_PROJECT_FIELDS) {
+    if (projectRaw[field as keyof SandboxConfig] === undefined) {
+      continue;
+    }
+    warnings.push(`[pi-sandbox] Ignoring ${field} in ${projectPath}: ${hint}`);
+  }
+
+  for (const warning of warnings) {
+    console.warn(warning);
+  }
+
+  return { raw, warnings };
+}
+
+export function loadConfig(workspaceDir: string): ConfigLoadResult {
+  const pathResolver = createPathResolver(workspaceDir);
+
+  const global = readGlobalConfig();
+  const projectPath = getProjectConfigPath(workspaceDir);
+  const projectRaw = readConfigFile(projectPath);
+  const sources = [...global.sources];
+  if (existsSync(projectPath)) {
+    sources.push(projectPath);
+  }
+  const { raw, warnings } = mergeProjectConfig(global.raw, projectRaw, projectPath, global.sources[0]);
 
   const { denyRead, allowRead } = mergeDenyRead(raw.denyRead, raw.allowRead, pathResolver);
   const protectedPaths = getProtectedPiPaths(workspaceDir);
@@ -145,6 +247,8 @@ export function loadConfig(workspaceDir: string): { config: SandboxConfig; pathR
       provider: resolveProvider(raw.provider),
     },
     pathResolver,
+    sources,
+    warnings,
   };
 }
 

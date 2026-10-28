@@ -44,6 +44,24 @@ describe("buildSandboxExecProfile", () => {
     assert.ok(allowIndex > denyIndex, "allowRead rules must appear after denyRead rules");
   });
 
+  it("re-denies denyRead paths nested inside an allowRead entry", () => {
+    const config: SandboxConfig = {
+      enabled: true,
+      readOnly: false,
+      allowRead: ["/Users/test/.ssh"],
+      denyRead: ["/Users/test/.ssh/id_rsa"],
+      writable: ["/workspace"],
+      denyWithin: [],
+      network: true,
+    };
+
+    const profile = buildSandboxExecProfile(config);
+    const allowIndex = profile.indexOf('(allow file-read* (subpath "/Users/test/.ssh"))');
+    const denyIndex = profile.lastIndexOf('(deny file-read* (subpath "/Users/test/.ssh/id_rsa"))');
+    assert.notEqual(allowIndex, -1);
+    assert.ok(denyIndex > allowIndex, "nested denyRead must appear after the broader allowRead");
+  });
+
   it("does not emit writable paths when readOnly is true", () => {
     const config: SandboxConfig = {
       enabled: true,

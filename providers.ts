@@ -87,6 +87,21 @@ export function buildSandboxExecProfile(config: SandboxConfig): string {
       lines.push(`(allow file-read* (literal "${ep}"))`);
       lines.push(`(allow file-read* (subpath "${ep}"))`);
     }
+
+    // SBPL applies the last matching rule, so re-deny paths nested inside an allowRead
+    // entry; otherwise the broader allow would shadow the narrower deny.
+    const nestedDenies = config.denyRead.filter((d) => {
+      const nd = stripTrailingSep(d);
+      return config.allowRead!.some((a) => nd.startsWith(stripTrailingSep(a) + "/"));
+    });
+    if (nestedDenies.length > 0) {
+      lines.push("; denied read paths nested inside allowRead");
+      for (const p of nestedDenies) {
+        const ep = escapeSbplPath(p);
+        lines.push(`(deny file-read* (literal "${ep}"))`);
+        lines.push(`(deny file-read* (subpath "${ep}"))`);
+      }
+    }
   }
 
   if (!config.readOnly && config.writable.length > 0) {
