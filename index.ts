@@ -99,11 +99,11 @@ export default function (pi: ExtensionAPI) {
   const warnedUnavailableProviders = new Set<string>();
   // sandbox.json is read once and only re-read on /sandbox-reload, so a change to it from
   // inside the sandbox can't take effect between commands.
-  let loadedConfig: ReturnType<typeof loadConfig>["config"] | undefined;
+  let loaded: ReturnType<typeof loadConfig> | undefined;
 
   function reloadConfig() {
-    loadedConfig = loadConfig(workspaceDir).config;
-    return loadedConfig;
+    loaded = loadConfig(workspaceDir);
+    return loaded;
   }
 
   pi.registerFlag("sandbox", {
@@ -136,25 +136,25 @@ export default function (pi: ExtensionAPI) {
   }
 
   function getState() {
-    const config = loadedConfig ?? reloadConfig();
-    const effectiveConfig = applyReadOnlyOverride(config, runtimeReadOnlyOverride);
-    const provider = selectProvider(effectiveConfig.provider);
+    const loadedConfig = loaded ?? reloadConfig();
+    const config = applyReadOnlyOverride(loadedConfig.config, runtimeReadOnlyOverride);
+    const provider = selectProvider(config.provider);
 
-    if (effectiveConfig.provider && effectiveConfig.provider !== "auto" && !provider.available()) {
-      const warningKey = `${effectiveConfig.provider}:${workspaceDir}`;
+    if (config.provider && config.provider !== "auto" && !provider.available()) {
+      const warningKey = `${config.provider}:${workspaceDir}`;
       if (!warnedUnavailableProviders.has(warningKey)) {
         warnedUnavailableProviders.add(warningKey);
         console.warn(
-          `[pi-sandbox] Forced provider "${effectiveConfig.provider}" is not available on this system. ` +
+          `[pi-sandbox] Forced provider "${config.provider}" is not available on this system. ` +
             `Falling back to automatic detection. Set provider to "auto" to suppress this warning.`,
         );
       }
     }
 
     const activeProvider = provider.available() ? provider : selectProvider("auto");
-    const enabled = runtimeEnabledOverride ?? effectiveConfig.enabled;
+    const enabled = runtimeEnabledOverride ?? config.enabled;
 
-    return { config: effectiveConfig, activeProvider, enabled };
+    return { config, activeProvider, enabled, sources: loadedConfig.sources, warnings: loadedConfig.warnings };
   }
 
   function writeBlockReason(action: string, targetPath: string, config: ReturnType<typeof getState>["config"]): string {
@@ -333,13 +333,14 @@ export default function (pi: ExtensionAPI) {
   pi.registerCommand("sandbox-status", {
     description: "Show pi-sandbox status and configuration",
     handler: async (_args, ctx) => {
-      const { config, activeProvider, enabled } = getState();
+      const { config, activeProvider, enabled, sources, warnings } = getState();
       const lines = [
         `pi-sandbox v${_version}`,
         `Enabled:      ${enabled ? "yes" : "no"}`,
         `Override:     ${runtimeEnabledOverride === undefined ? "config" : runtimeEnabledOverride ? "enabled" : "disabled"}`,
         `RO Override:  ${runtimeReadOnlyOverride === undefined ? "config" : runtimeReadOnlyOverride ? "enabled" : "disabled"}`,
         `Provider:     ${activeProvider.name}${enabled && activeProvider.name === "none" ? " (unavailable)" : ""}`,
+        `Config:       ${sources.length > 0 ? sources.join(", ") : "none (defaults only)"}`,
         `Read-only:    ${config.readOnly ? "yes" : "no"}`,
         `Network:      ${config.network ? "allowed" : "blocked"}`,
         `Background:   ${describeBackgroundProcesses(activeProvider.name, config.allowBackgroundProcesses)}`,
@@ -365,6 +366,9 @@ export default function (pi: ExtensionAPI) {
         }
       }
       ctx.ui.notify(lines.join("\n"), "info");
+      for (const warning of warnings) {
+        ctx.ui.notify(warning, "warning");
+      }
     },
   });
 
@@ -392,9 +396,13 @@ export default function (pi: ExtensionAPI) {
   pi.registerCommand("sandbox-reload", {
     description: "Re-read sandbox.json and apply it to the current Pi process",
     handler: async (_args, ctx) => {
-      reloadConfig();
+      const { sources } = reloadConfig();
       const { activeProvider, enabled } = getState();
-      ctx.ui.notify(`pi-sandbox: sandbox.json reloaded (${enabled ? `enabled, ${activeProvider.name}` : "disabled"})`, "info");
+      const configList = sources.length > 0 ? sources.join(", ") : "defaults";
+      ctx.ui.notify(
+        `pi-sandbox: reloaded ${configList} (${enabled ? `enabled, ${activeProvider.name}` : "disabled"})`,
+        "info",
+      );
     },
   });
 
