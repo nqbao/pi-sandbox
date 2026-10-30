@@ -56,6 +56,7 @@ Supported fields:
 - `denyWithin`: subpaths that stay blocked even if they are inside a writable directory
 - `network`: whether outbound network access is allowed
 - `allowBackgroundProcesses`: Linux only, default `false` (see [Background processes](#background-processes-linux))
+- `allowGpu`: macOS only, default `false` (see [GPU access](#gpu-access-macos))
 - `provider`: `auto`, `sandbox-exec`, `bubblewrap`, or `none`
 
 Example:
@@ -120,7 +121,7 @@ A project can ship `<workspace>/.pi/sandbox.json` so everyone working in the rep
 - `denyRead` and `denyWithin` are added to the global entries.
 - `enabled: true`, `readOnly: true`, and `network: false` are applied.
 - `enabled: false`, `readOnly: false`, and `network: true` are ignored with a warning, so cloning a repository can never turn the sandbox off or open it up.
-- `allowRead`, `writable`, `provider`, and `allowBackgroundProcesses` are ignored with a warning. Set them in the global file if you need them.
+- `allowRead`, `writable`, `provider`, `allowBackgroundProcesses`, and `allowGpu` are ignored with a warning. Set them in the global file if you need them.
 
 ```json
 {
@@ -160,6 +161,20 @@ Set `"allowBackgroundProcesses": true` to keep them running. Background jobs kee
 
 They also aren't tied to Pi, so they keep running after Pi exits until you stop them.
 
+### GPU access (macOS)
+
+The macOS sandbox blocks the GPU by default, so Metal finds no device and GPU workloads such as PyTorch MPS can't use it. Set `"allowGpu": true` in the global `sandbox.json` to allow Metal, then run `/sandbox-reload`. No extra `writable` entries are needed.
+
+```json
+{
+  "allowGpu": true
+}
+```
+
+Every other sandbox restriction still applies, but this exposes GPU driver interfaces to sandboxed code. Those drivers run in the kernel, so a bug in one gives a sandboxed command a way to try to escape. Leave it off unless you need it.
+
+The rules target Apple Silicon GPUs and may not be enough on Intel Macs. On Linux `allowGpu` has no effect.
+
 ## Status Command
 
 The extension registers a Pi command:
@@ -168,7 +183,7 @@ The extension registers a Pi command:
 /sandbox-status
 ```
 
-It shows the active provider, network mode, writable paths, deny rules, and which `sandbox.json` files were loaded.
+It shows the active provider, network mode, GPU access, writable paths, deny rules, and which `sandbox.json` files were loaded.
 
 Runtime controls:
 

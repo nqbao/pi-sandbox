@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { applyReadOnlyOverride, assertSandboxProviderAvailable, describeBackgroundProcesses, readShellPath, resolveStartupOverrides } from "./index.ts";
+import { applyReadOnlyOverride, assertSandboxProviderAvailable, describeBackgroundProcesses, describeGpu, readShellPath, resolveStartupOverrides } from "./index.ts";
 import type { SandboxConfig } from "./types.ts";
 
 describe("applyReadOnlyOverride", () => {
@@ -73,6 +73,18 @@ describe("describeBackgroundProcesses", () => {
     for (const allow of [false, true]) {
       assert.match(describeBackgroundProcesses("sandbox-exec", allow), /^kept running .*only applies on Linux/);
     }
+  });
+});
+
+describe("describeGpu", () => {
+  it("reflects allowGpu on macOS", () => {
+    assert.equal(describeGpu("sandbox-exec", false), "blocked");
+    assert.equal(describeGpu("sandbox-exec", true), "allowed (Metal)");
+  });
+
+  it("says allowGpu only applies on macOS", () => {
+    assert.equal(describeGpu("bubblewrap", false), "unchanged");
+    assert.match(describeGpu("bubblewrap", true), /only applies on macOS/);
   });
 });
 

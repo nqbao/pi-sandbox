@@ -27,7 +27,7 @@ class SandboxExecProvider implements SandboxProvider {
   }
 
   wrap(inner: BashOperations, _cwd: string, config: SandboxConfig, shellPath?: string): BashOperations {
-    const key = JSON.stringify([config.readOnly, config.network, config.writable, config.denyRead, config.denyWithin, config.allowRead]);
+    const key = JSON.stringify([config.readOnly, config.network, config.writable, config.denyRead, config.denyWithin, config.allowRead, config.allowGpu]);
     let profile = this._profileCache.get(key);
     if (!profile) {
       profile = buildSandboxExecProfile(config);
@@ -141,6 +141,21 @@ export function buildSandboxExecProfile(config: SandboxConfig): string {
       "(allow mach-lookup",
       '  (global-name "com.apple.mDNSResponder")',
       '  (global-name "com.apple.mDNSResponderHelper"))',
+    );
+  }
+
+  if (config.allowGpu) {
+    lines.push(
+      "; GPU / Metal (MPS)",
+      "(allow iokit-get-properties)",
+      "(allow iokit-open",
+      '  (iokit-user-client-class "AGXDeviceUserClient")',
+      '  (iokit-user-client-class "IOSurfaceRootUserClient")',
+      '  (iokit-connection "IOAccelerator"))',
+      "(allow mach-lookup",
+      '  (global-name "com.apple.MTLCompilerService")',
+      '  (global-name "com.apple.cvmsServ")',
+      '  (global-name "com.apple.gpumemd.source"))',
     );
   }
 

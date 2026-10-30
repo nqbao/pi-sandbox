@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildBwrapSetup, buildSandboxExecProfile, buildSandboxedArgv, execSandboxed } from "./providers.ts";
+import { buildBwrapSetup, buildSandboxExecProfile, buildSandboxedArgv, execSandboxed, providers } from "./providers.ts";
 import { createLocalBashOperations, getShellConfig } from "@earendil-works/pi-coding-agent";
 import type { SandboxConfig } from "./types.ts";
 
@@ -79,6 +79,49 @@ describe("buildSandboxExecProfile", () => {
     assert.doesNotMatch(profile, /; writable paths/);
     assert.doesNotMatch(profile, /\(subpath "\/workspace"\)/);
     assert.doesNotMatch(profile, /\(subpath "\/tmp"\)/);
+  });
+
+  describe("allowGpu", () => {
+    const config: SandboxConfig = {
+      enabled: true,
+      denyRead: [],
+      writable: ["/workspace"],
+      denyWithin: [],
+      network: false,
+    };
+    const gpuRules = /iokit-open|iokit-get-properties|MTLCompilerService/;
+
+    it("leaves GPU access out by default", () => {
+      assert.doesNotMatch(buildSandboxExecProfile(config), gpuRules);
+      assert.doesNotMatch(buildSandboxExecProfile({ ...config, allowGpu: false }), gpuRules);
+    });
+
+    it("allows Metal when set, without touching file or network rules", () => {
+      const without = buildSandboxExecProfile(config);
+      const profile = buildSandboxExecProfile({ ...config, allowGpu: true });
+      assert.match(profile, /\(allow iokit-open/);
+      assert.match(profile, /AGXDeviceUserClient/);
+      assert.match(profile, /com\.apple\.MTLCompilerService/);
+      assert.ok(profile.startsWith(without), "GPU rules should only be appended");
+      assert.doesNotMatch(profile, /\(allow network/);
+    });
+
+    it("does not reuse a cached profile when allowGpu changes", async () => {
+      const commands: string[] = [];
+      const inner = {
+        exec: async (command: string) => {
+          commands.push(command);
+          return { exitCode: 0 };
+        },
+      } as unknown as Parameters<(typeof providers)["sandbox-exec"]["wrap"]>[0];
+
+      for (const allowGpu of [false, true]) {
+        await providers["sandbox-exec"].wrap(inner, "/workspace", { ...config, allowGpu }).exec("true", "/workspace", {} as never);
+      }
+
+      assert.doesNotMatch(commands[0], /MTLCompilerService/);
+      assert.match(commands[1], /MTLCompilerService/);
+    });
   });
 });
 
