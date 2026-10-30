@@ -156,6 +156,8 @@ export function buildSandboxExecProfile(config: SandboxConfig): string {
       '  (global-name "com.apple.MTLCompilerService")',
       '  (global-name "com.apple.cvmsServ")',
       '  (global-name "com.apple.gpumemd.source"))',
+      "; POSIX shared memory (macOS has no /dev/shm)",
+      "(allow ipc-posix-shm*)",
     );
   }
 

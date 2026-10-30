@@ -344,7 +344,7 @@ describe("project-level sandbox.json", () => {
     });
   });
 
-  it("ignores allowRead, writable, provider, allowBackgroundProcesses, and allowGpu", () => {
+  it("ignores allowRead, writable, provider, and allowBackgroundProcesses", () => {
     withFixtures(
       {
         global: { network: false },
@@ -353,13 +353,12 @@ describe("project-level sandbox.json", () => {
           writable: ["/"],
           provider: "none",
           allowBackgroundProcesses: true,
-          allowGpu: true,
         },
       },
       ({ loadConfigFor }) => {
         const { config, warnings } = loadConfigFor();
-        assert.equal(warnings.length, 5);
-        for (const field of ["allowRead", "writable", "provider", "allowBackgroundProcesses", "allowGpu"]) {
+        assert.equal(warnings.length, 4);
+        for (const field of ["allowRead", "writable", "provider", "allowBackgroundProcesses"]) {
           assert.ok(warnings.some((w) => w.includes(`Ignoring ${field}`)), `expected a warning for ${field}`);
         }
         // Default-denied credentials stay denied, and writable roots are unchanged.
@@ -367,9 +366,30 @@ describe("project-level sandbox.json", () => {
         assert.equal(config.writable.includes(resolveRealPath("/")), false);
         assert.equal(config.provider, "auto");
         assert.equal(config.allowBackgroundProcesses, false);
-        assert.equal(config.allowGpu, false);
       },
     );
+  });
+
+  it("lets the project turn allowGpu on or off", () => {
+    withFixtures({ global: {}, project: { allowGpu: true } }, ({ loadConfigFor }) => {
+      const { config, warnings } = loadConfigFor();
+      assert.equal(config.allowGpu, true);
+      assert.deepEqual(warnings, []);
+    });
+    withFixtures({ global: { allowGpu: true }, project: { allowGpu: false } }, ({ loadConfigFor }) => {
+      assert.equal(loadConfigFor().config.allowGpu, false);
+    });
+  });
+
+  it("ignores a non-boolean project allowGpu", () => {
+    withFixtures({ global: { allowGpu: true }, project: { allowGpu: "no" } }, ({ loadConfigFor }) => {
+      const { config, warnings } = loadConfigFor();
+      assert.equal(config.allowGpu, true);
+      assert.ok(warnings.some((w) => w.includes("Ignoring allowGpu")));
+    });
+    withFixtures({ global: {}, project: { allowGpu: "yes" } }, ({ loadConfigFor }) => {
+      assert.equal(loadConfigFor().config.allowGpu, false);
+    });
   });
 
   it("keeps allowGpu from the global config and off by default", () => {

@@ -116,12 +116,13 @@ Use `allowRead` to unblock any of these. `sandbox.json` is global, so this appli
 
 ### Project-level policy
 
-A project can ship `<workspace>/.pi/sandbox.json` so everyone working in the repo gets the same sandbox policy. It is layered over the global file and **can only tighten the policy**, because it comes from the repository and Pi cannot ask for trust on it:
+A project can ship `<workspace>/.pi/sandbox.json` so everyone working in the repo gets the same sandbox policy. It is layered over the global file and, apart from `allowGpu`, **can only tighten the policy**, because it comes from the repository and Pi cannot ask for trust on it:
 
 - `denyRead` and `denyWithin` are added to the global entries.
 - `enabled: true`, `readOnly: true`, and `network: false` are applied.
-- `enabled: false`, `readOnly: false`, and `network: true` are ignored with a warning, so cloning a repository can never turn the sandbox off or open it up.
-- `allowRead`, `writable`, `provider`, `allowBackgroundProcesses`, and `allowGpu` are ignored with a warning. Set them in the global file if you need them.
+- `enabled: false`, `readOnly: false`, and `network: true` are ignored with a warning, so cloning a repository can't turn the sandbox off, open up file access, or open the network.
+- `allowGpu` overrides the global value in either direction. **A repository can turn GPU access on without asking you**, so check for it before running Pi in a folder you don't trust (see [GPU access](#gpu-access-macos)).
+- `allowRead`, `writable`, `provider`, and `allowBackgroundProcesses` are ignored with a warning. Set them in the global file if you need them.
 
 ```json
 {
@@ -163,7 +164,7 @@ They also aren't tied to Pi, so they keep running after Pi exits until you stop 
 
 ### GPU access (macOS)
 
-The macOS sandbox blocks the GPU by default, so Metal finds no device and GPU workloads such as PyTorch MPS can't use it. Set `"allowGpu": true` in the global `sandbox.json` to allow Metal, then run `/sandbox-reload`. No extra `writable` entries are needed.
+The macOS sandbox blocks the GPU by default, so Metal finds no device and GPU workloads such as PyTorch MPS can't use it. Set `"allowGpu": true` in the global `sandbox.json`, or in `.pi/sandbox.json` for a single project, to allow Metal, then run `/sandbox-reload`. No extra `writable` entries are needed. The project value wins, so a project can also set `false` to turn off a global `true`.
 
 ```json
 {
@@ -171,7 +172,7 @@ The macOS sandbox blocks the GPU by default, so Metal finds no device and GPU wo
 }
 ```
 
-Every other sandbox restriction still applies, but this exposes GPU driver interfaces to sandboxed code. Those drivers run in the kernel, so a bug in one gives a sandboxed command a way to try to escape. Leave it off unless you need it.
+Every other sandbox restriction still applies, but this exposes GPU driver interfaces to sandboxed code. Those drivers run in the kernel, so a bug in one gives a sandboxed command a way to try to escape. It also allows POSIX shared memory, so sandboxed code can open shared memory objects created by your other processes if it knows their names. Leave it off unless you need it. `/sandbox-status` shows whether it is on.
 
 The rules target Apple Silicon GPUs and may not be enough on Intel Macs. On Linux `allowGpu` has no effect.
 
