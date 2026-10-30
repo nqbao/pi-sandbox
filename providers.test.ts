@@ -89,7 +89,7 @@ describe("buildSandboxExecProfile", () => {
       denyWithin: [],
       network: false,
     };
-    const gpuRules = /iokit-open|iokit-get-properties|MTLCompilerService/;
+    const gpuRules = /iokit-open|iokit-get-properties|MTLCompilerService|ipc-posix-shm/;
 
     it("leaves GPU access out by default", () => {
       assert.doesNotMatch(buildSandboxExecProfile(config), gpuRules);
@@ -102,6 +102,7 @@ describe("buildSandboxExecProfile", () => {
       assert.match(profile, /\(allow iokit-open/);
       assert.match(profile, /AGXDeviceUserClient/);
       assert.match(profile, /com\.apple\.MTLCompilerService/);
+      assert.match(profile, /\(allow ipc-posix-shm\*\)/);
       assert.ok(profile.startsWith(without), "GPU rules should only be appended");
       assert.doesNotMatch(profile, /\(allow network/);
     });

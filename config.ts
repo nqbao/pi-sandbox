@@ -15,8 +15,9 @@ const GLOBAL_CONFIG_SEARCH_PATHS = [
   () => `${homedir()}/.pi/agent/${CONFIG_FILE}`,
 ];
 
-// Project-local policy. It comes from the repository, so it can only tighten the global config.
-const IGNORED_PROJECT_FIELDS = ["allowRead", "writable", "provider", "allowBackgroundProcesses", "allowGpu"];
+// Project-local policy. It comes from the repository, so apart from allowGpu it can only tighten
+// the global config.
+const IGNORED_PROJECT_FIELDS = ["allowRead", "writable", "provider", "allowBackgroundProcesses"];
 
 export function createPathResolver(workspaceDir: string): PathResolver {
   const vars: Record<string, string> = {
@@ -156,7 +157,8 @@ function readGlobalConfig(paths: string[]): { raw: Partial<SandboxConfig>; sourc
 
 /**
  * Layers a project config over the global one. A project file ships with the repository, so
- * it may only tighten a policy: it can block more, never less.
+ * it may only tighten a policy: it can block more, never less. allowGpu is the one exception,
+ * so GPU workloads can opt in per repository.
  */
 export function mergeProjectConfig(
   globalRaw: Partial<SandboxConfig>,
@@ -183,6 +185,12 @@ export function mergeProjectConfig(
     raw.network = false;
   } else if (projectRaw.network !== undefined) {
     warnings.push(`[pi-sandbox] Ignoring network=${JSON.stringify(projectRaw.network)} in ${projectPath}: ${hint}`);
+  }
+
+  if (typeof projectRaw.allowGpu === "boolean") {
+    raw.allowGpu = projectRaw.allowGpu;
+  } else if (projectRaw.allowGpu !== undefined) {
+    warnings.push(`[pi-sandbox] Ignoring allowGpu=${JSON.stringify(projectRaw.allowGpu)} in ${projectPath}: expected a boolean`);
   }
 
   // Deny lists are additive, so a project can always block more paths. When the global
