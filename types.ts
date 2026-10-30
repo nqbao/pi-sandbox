@@ -27,6 +27,11 @@ export interface SandboxConfig {
    * host processes. Default: false.
    */
   allowBackgroundProcesses?: boolean;
+  /**
+   * macOS only: let sandboxed commands use the GPU through Metal (e.g. PyTorch MPS). Opens GPU
+   * driver interfaces to sandboxed code, which is a large kernel attack surface. Default: false.
+   */
+  allowGpu?: boolean;
   /** Force a specific provider: "auto" | "sandbox-exec" | "bubblewrap" | "none". Default: "auto". */
   provider?: SandboxProviderType;
 }

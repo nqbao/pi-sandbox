@@ -45,6 +45,13 @@ export function describeBackgroundProcesses(providerName: string, allowBackgroun
   return "kept running";
 }
 
+export function describeGpu(providerName: string, allowGpu: boolean | undefined): string {
+  if (providerName === "sandbox-exec") {
+    return allowGpu ? "allowed (Metal)" : "blocked";
+  }
+  return allowGpu ? "unchanged (allowGpu only applies on macOS)" : "unchanged";
+}
+
 // pi.getSettings() was added in Pi 0.99.0; on older Pi, shellPath can't be read.
 export function readShellPath(pi: Pick<ExtensionAPI, "getSettings">, warn: (message: string) => void): string | undefined {
   if (typeof pi.getSettings !== "function") {
@@ -344,6 +351,7 @@ export default function (pi: ExtensionAPI) {
         `Read-only:    ${config.readOnly ? "yes" : "no"}`,
         `Network:      ${config.network ? "allowed" : "blocked"}`,
         `Background:   ${describeBackgroundProcesses(activeProvider.name, config.allowBackgroundProcesses)}`,
+        `GPU:          ${describeGpu(activeProvider.name, config.allowGpu)}`,
         `Writable:`,
         ...(config.writable.length > 0 ? config.writable.map((p) => `  - ${p}`) : ["  - none"]),
       ];

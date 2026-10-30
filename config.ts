@@ -16,7 +16,7 @@ const GLOBAL_CONFIG_SEARCH_PATHS = [
 ];
 
 // Project-local policy. It comes from the repository, so it can only tighten the global config.
-const IGNORED_PROJECT_FIELDS = ["allowRead", "writable", "provider", "allowBackgroundProcesses"];
+const IGNORED_PROJECT_FIELDS = ["allowRead", "writable", "provider", "allowBackgroundProcesses", "allowGpu"];
 
 export function createPathResolver(workspaceDir: string): PathResolver {
   const vars: Record<string, string> = {
@@ -254,6 +254,7 @@ export function loadConfig(workspaceDir: string, options: LoadConfigOptions = {}
       readOnlyMounts: resolveUnique(getReadOnlyMounts()),
       network: raw.network ?? true,
       allowBackgroundProcesses: raw.allowBackgroundProcesses === true,
+      allowGpu: raw.allowGpu === true,
       provider: resolveProvider(raw.provider),
     },
     pathResolver,
