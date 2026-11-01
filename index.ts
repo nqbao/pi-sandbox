@@ -6,7 +6,8 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { readFileSync } from "node:fs";
 import { loadConfig, isPathAllowed } from "./config.ts";
-import { selectProvider } from "./providers.ts";
+import { prepareSandboxedCommand, selectProvider } from "./providers.ts";
+import { toolAdapters } from "./tool-adapters.ts";
 import { isPathReadable, isPathSearchable, resolveToolPath, resolveRealPath } from "./guard.ts";
 
 let _version = "unknown";
@@ -319,6 +320,48 @@ export default function (pi: ExtensionAPI) {
           reason: `pi-sandbox: ls of "${targetPath}" blocked (matches denyRead: ${config.denyRead.join(", ")})`,
         };
       }
+    }
+  });
+
+  // ── Adapters for other extensions' command tools ────────────────────────
+
+  // These tools spawn the command after this hook returns and don't report back, so temporary
+  // mount sources can't be released on any session event: removing one before the sandbox has
+  // finished starting kills the job. Sandboxed jobs can't outlive Pi, so release them on exit.
+  const adapterCleanups = new Set<() => void>();
+  const runAdapterCleanups = () => {
+    for (const cleanup of adapterCleanups) {
+      cleanup();
+    }
+    adapterCleanups.clear();
+  };
+
+  pi.on("tool_call", (event) => {
+    const adapter = toolAdapters.get(event.toolName);
+    if (!adapter) {
+      return;
+    }
+    const block = (why: string) => ({ block: true, reason: `pi-sandbox: ${event.toolName} blocked (${why})` });
+    try {
+      const { config, activeProvider, enabled } = getState();
+      if (!enabled) {
+        return;
+      }
+      assertSandboxProviderAvailable(enabled, activeProvider.name);
+      const shellPath = getShellPath();
+      const reason = adapter.rewrite(event.input as Record<string, unknown>, (command, cwd) => {
+        const prepared = prepareSandboxedCommand(activeProvider, command, cwd, workspaceDir, config, shellPath);
+        if (prepared.cleanup) {
+          if (adapterCleanups.size === 0) {
+            process.once("exit", runAdapterCleanups);
+          }
+          adapterCleanups.add(prepared.cleanup);
+        }
+        return prepared.command;
+      });
+      return reason ? block(reason) : undefined;
+    } catch (err) {
+      return block(`sandbox preparation failed: ${err instanceof Error ? err.message : String(err)}`);
     }
   });
 

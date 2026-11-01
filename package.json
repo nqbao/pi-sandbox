@@ -21,6 +21,7 @@
     "index.ts",
     "config.ts",
     "providers.ts",
+    "tool-adapters.ts",
     "guard.ts",
     "types.ts",
     "README.md",

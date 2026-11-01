@@ -151,6 +151,14 @@ On Linux, bubblewrap can only mount existing paths read-only. So before a bash c
 
 Paths are resolved through symlinks before they are checked, including paths that don't exist yet, so a write through a symlinked directory is checked against its real target.
 
+### Background jobs from other extensions
+
+Some extensions run shell commands themselves instead of going through Pi's `bash` tool. pi-sandbox rewrites these tool calls so the command runs in the same sandbox as `bash`, and blocks the call if the sandbox can't be prepared. Supported tools are listed in `tool-adapters.ts`.
+
+- `bg_run` ([pi-bg-run](https://pi.dev/packages/pi-bg-run)): the whole command runs in the sandbox, in Pi's shell, under the job's original process, so logs, exit codes, completion notifications and `bg_kill` work as usual. The job's `Command:` output shows the sandbox wrapper.
+
+Only agent tool calls are covered. Anything an extension starts by other means, such as its own slash commands, isn't. On Linux, jobs stop when Pi exits.
+
 ### Background processes (Linux)
 
 On Linux each bash command gets its own PID namespace, so it can't see or signal other processes on your machine. The catch is that background jobs (`npm run dev &`, `nohup ... &`) are killed as soon as the command returns. On macOS they keep running.
