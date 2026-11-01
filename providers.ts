@@ -2,7 +2,7 @@ import { chmodSync, existsSync, mkdtempSync, mkdirSync, readdirSync, rmSync, sta
 import { resolve as pathResolve, dirname, join } from "node:path";
 import { platform, tmpdir } from "node:os";
 import { getShellConfig, type BashOperations } from "@earendil-works/pi-coding-agent";
-import type { SandboxProvider, SandboxConfig, SandboxProviderType } from "./types.ts";
+import type { SandboxInvocation, SandboxProvider, SandboxConfig, SandboxProviderType } from "./types.ts";
 import { stripTrailingSep } from "./guard.ts";
 
 function findBinary(name: string): boolean {
@@ -26,22 +26,19 @@ class SandboxExecProvider implements SandboxProvider {
     return platform() === "darwin" && findBinary("sandbox-exec");
   }
 
-  wrap(inner: BashOperations, _cwd: string, config: SandboxConfig, shellPath?: string): BashOperations {
+  prepare(_cwd: string, _workspaceDir: string, config: SandboxConfig): SandboxInvocation {
     const key = JSON.stringify([config.readOnly, config.network, config.writable, config.denyRead, config.denyWithin, config.allowRead, config.allowGpu]);
     let profile = this._profileCache.get(key);
     if (!profile) {
       profile = buildSandboxExecProfile(config);
       this._profileCache.set(key, profile);
     }
-
-    return {
-      ...inner,
-      exec(command, cwd, options) {
-        return execSandboxed(inner, "sandbox-exec", ["-p", profile], command, cwd, options, undefined, shellPath);
-      },
-    };
+    return { executable: "sandbox-exec", args: ["-p", profile] };
   }
 
+  wrap(inner: BashOperations, workspaceDir: string, config: SandboxConfig, shellPath?: string): BashOperations {
+    return wrapWithInvocation(this, inner, workspaceDir, config, shellPath);
+  }
 }
 
 function escapeSbplPath(path: string): string {
@@ -188,14 +185,13 @@ class BubblewrapProvider implements SandboxProvider {
     return platform() === "linux" && findBinary("bwrap");
   }
 
+  prepare(cwd: string, workspaceDir: string, config: SandboxConfig): SandboxInvocation {
+    const setup = buildBwrapSetup(cwd, config, workspaceDir);
+    return { executable: "bwrap", args: setup.args, cleanup: setup.cleanup };
+  }
+
   wrap(inner: BashOperations, workspaceDir: string, config: SandboxConfig, shellPath?: string): BashOperations {
-    return {
-      ...inner,
-      exec(command, cwd, options) {
-        const setup = buildBwrapSetup(cwd, config, workspaceDir);
-        return execSandboxed(inner, "bwrap", setup.args, command, cwd, options, setup.cleanup, shellPath);
-      },
-    };
+    return wrapWithInvocation(this, inner, workspaceDir, config, shellPath);
   }
 }
 
@@ -456,6 +452,10 @@ class NoopProvider implements SandboxProvider {
     return true;
   }
 
+  prepare(): SandboxInvocation {
+    throw new Error("pi-sandbox: no OS sandbox provider is available");
+  }
+
   wrap(inner: BashOperations, _cwd: string, _config: SandboxConfig): BashOperations {
     return inner;
   }
@@ -495,6 +495,41 @@ export async function execSandboxed(
     return await inner.exec(buildSandboxedCommand(binary, args, command, shellPath), cwd, options);
   } finally {
     cleanup?.();
+  }
+}
+
+function wrapWithInvocation(
+  provider: SandboxProvider,
+  inner: BashOperations,
+  workspaceDir: string,
+  config: SandboxConfig,
+  shellPath?: string,
+): BashOperations {
+  return {
+    ...inner,
+    exec(command, cwd, options) {
+      const { executable, args, cleanup } = provider.prepare(cwd, workspaceDir, config);
+      return execSandboxed(inner, executable, args, command, cwd, options, cleanup, shellPath);
+    },
+  };
+}
+
+// For a command another tool spawns later: nothing here waits for it, so the caller owns
+// `cleanup` and must not run it until the command has started.
+export function prepareSandboxedCommand(
+  provider: SandboxProvider,
+  command: string,
+  cwd: string,
+  workspaceDir: string,
+  config: SandboxConfig,
+  shellPath?: string,
+): { command: string; cleanup?: () => void } {
+  const { executable, args, cleanup } = provider.prepare(cwd, workspaceDir, config);
+  try {
+    return { command: buildSandboxedCommand(executable, args, command, shellPath), cleanup };
+  } catch (err) {
+    cleanup?.();
+    throw err;
   }
 }
 

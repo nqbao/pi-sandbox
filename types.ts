@@ -38,11 +38,22 @@ export interface SandboxConfig {
 
 export type SandboxProviderType = "auto" | "sandbox-exec" | "bubblewrap" | "none";
 
+export interface SandboxInvocation {
+  /** The sandbox binary. */
+  executable: string;
+  /** Arguments to the sandbox binary, up to but excluding the `--` before the shell. */
+  args: string[];
+  /** Releases temporary files the sandbox mounts. Absent when there are none. */
+  cleanup?: () => void;
+}
+
 export interface SandboxProvider {
   /** Human-readable name for logging. */
   readonly name: string;
   /** Whether this provider is available on the current system. */
   available(): boolean;
+  /** Builds the sandbox invocation for a command run from `cwd`. Throws if it can't be prepared. */
+  prepare(cwd: string, workspaceDir: string, config: SandboxConfig): SandboxInvocation;
   /**
    * Wraps a BashOperations instance with sandbox enforcement.
    * Returns a new BashOperations whose `exec` passes commands through the OS sandbox.
